@@ -149,3 +149,50 @@ test('the pool producer refuses a job without a stamped limit', { skip }, () => 
     fs.rmSync(f.root, { recursive: true, force: true });
   }
 });
+
+test(
+  'the pool producer records the root a prompt job ran in and the HEAD it left',
+  { skip },
+  () => {
+    const f = fixture();
+    const dir = path.join(f.root, 'agy03');
+    const work = path.join(f.root, 'work');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(work, { recursive: true });
+    const git = (...args) =>
+      spawnSync('git', ['-c', 'safe.directory=*', '-C', work, ...args], { encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'user.name', 'fixture');
+    fs.writeFileSync(path.join(work, 'a.txt'), 'a');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'base');
+    const head = git('rev-parse', 'HEAD').stdout.trim();
+    fs.writeFileSync(
+      path.join(dir, 'job.json'),
+      JSON.stringify({ prompt: 'p', jobId: 'agy03/x', printTimeoutSec: 7, cwd: work })
+    );
+    try {
+      const res = f.runProducer(dir, 'agy03');
+      assert.equal(res.status, 0, res.stderr);
+      const written = readResult(dir);
+      assert.equal(written.jobId, 'agy03/x');
+      assert.equal(path.resolve(written.cwd).toLowerCase(), path.resolve(work).toLowerCase());
+      assert.equal(written.headSha, head);
+      // A job whose root is not a git checkout records the root but no head.
+      const plain = path.join(f.root, 'plain');
+      fs.mkdirSync(plain);
+      fs.writeFileSync(
+        path.join(dir, 'job.json'),
+        JSON.stringify({ prompt: 'p', jobId: 'agy03/y', printTimeoutSec: 7, cwd: plain })
+      );
+      const again = f.runProducer(dir, 'agy03');
+      assert.equal(again.status, 0, again.stderr);
+      const second = readResult(dir);
+      assert.equal(second.jobId, 'agy03/y');
+      assert.equal(second.headSha, undefined);
+    } finally {
+      fs.rmSync(f.root, { recursive: true, force: true });
+    }
+  }
+);

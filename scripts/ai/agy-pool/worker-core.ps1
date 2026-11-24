@@ -52,6 +52,15 @@ $resultRecord = [ordered]@{ name = $Name; state = $state; exitCode = $p.ExitCode
 # Echo the submitted job identity so the controller never takes a late prior run's
 # result as the current job's output.
 if ($job.jobId) { $resultRecord.jobId = [string]$job.jobId }
+# Receipt binding for a prompt job: the root this job actually ran in and the HEAD it
+# left there, so the controller checks a writer's commit against this job's own record
+# rather than whatever the root holds later. A root that is not a git checkout records
+# no head, and the controller then refuses the writer commit.
+if (-not $job.command) {
+  $resultRecord.cwd = [string](Resolve-Path -LiteralPath $cwd).Path
+  $head = & git -c 'safe.directory=*' -C $cwd rev-parse HEAD 2>$null
+  if ($LASTEXITCODE -eq 0 -and "$head".Trim() -match '^[0-9a-fA-F]{40}$') { $resultRecord.headSha = "$head".Trim() }
+}
 
 # Quota is tracked by observation: agy logs no remaining-credit figure, and reading the
 # account token to ask Google directly is ruled out. One line per run; the dashboard

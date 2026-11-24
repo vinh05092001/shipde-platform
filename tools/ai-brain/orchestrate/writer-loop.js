@@ -138,7 +138,7 @@ function resolveLauncher(o, isolatedLauncher) {
         return { ...launched, exitCode: 1, stderr: refusal, refusal, identityProof };
       }
       if (!job.isReview && WRITER_ROLE.test(job.labels?.role || '')) {
-        const scoped = verifyAgyWriterCommit(job, o);
+        const scoped = verifyAgyWriterCommit(job, result, o);
         if (!scoped.ok) {
           const reason =
             scoped.code +
@@ -428,20 +428,42 @@ const WRITER_ROLE = /^author(?:\.|$)|^(?:writer|repair)$/;
 
 /**
  * Writer-scope check for an agy-pool writer, which runs outside the isolated
- * launcher. The root, base and head all come from the job the Controller bound
- * to this run: a missing or unreadable one refuses, and nothing falls back to
- * the Controller's own checkout or HEAD.
+ * launcher. The root and base come from the job the Controller bound to this
+ * run, and the head from that job's own receipt: the pool worker records the
+ * root it ran in and the HEAD it left there. The root's HEAD must still be that
+ * head, so a commit another job made on a shared root is never taken as this
+ * job's. A missing or mismatched value refuses, and nothing falls back to the
+ * Controller's own checkout or HEAD.
  */
-function verifyAgyWriterCommit(job, options) {
+function verifyAgyWriterCommit(job, receipt, options) {
   const root = job.workerRoot || job.cwd || null;
   if (!root || !fs.existsSync(path.join(root, '.git'))) {
     return { ok: false, code: 'AGY_WRITER_ROOT_UNBOUND' };
   }
   const baseSha = typeof job.baseSha === 'string' && SHA_40.test(job.baseSha) ? job.baseSha : null;
   if (!baseSha) return { ok: false, code: 'AGY_WRITER_BASE_UNBOUND' };
-  const headSha = headShaOf(root, options);
-  if (!headSha) return { ok: false, code: 'AGY_WRITER_HEAD_UNREADABLE' };
-  if (headSha !== baseSha) {
+  const ran = receipt && typeof receipt.cwd === 'string' && receipt.cwd ? receipt.cwd : null;
+  if (!ran) return { ok: false, code: 'AGY_WRITER_RECEIPT_ROOT_MISSING' };
+  const same = (a, b) => {
+    const norm = (p) => path.resolve(p).replace(/[\\/]+$/, '');
+    return process.platform === 'win32'
+      ? norm(a).toLowerCase() === norm(b).toLowerCase()
+      : norm(a) === norm(b);
+  };
+  if (!same(ran, root)) {
+    return { ok: false, code: 'AGY_WRITER_RECEIPT_ROOT_MISMATCH', detail: ran };
+  }
+  const headSha =
+    receipt && typeof receipt.headSha === 'string' && SHA_40.test(receipt.headSha)
+      ? receipt.headSha.toLowerCase()
+      : null;
+  if (!headSha) return { ok: false, code: 'AGY_WRITER_RECEIPT_HEAD_MISSING' };
+  const current = headShaOf(root, options);
+  if (!current) return { ok: false, code: 'AGY_WRITER_HEAD_UNREADABLE' };
+  if (current.toLowerCase() !== headSha) {
+    return { ok: false, code: 'AGY_WRITER_RECEIPT_HEAD_MISMATCH', detail: current };
+  }
+  if (headSha !== baseSha.toLowerCase()) {
     const { runHardenedGit } = require('./hardened-git');
     const anc = runHardenedGit(root, ['merge-base', '--is-ancestor', baseSha, headSha]);
     if (anc.error || anc.status !== 0) {

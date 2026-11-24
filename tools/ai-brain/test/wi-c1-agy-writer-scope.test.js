@@ -50,12 +50,27 @@ const quota = (claude, at) => ({
   ],
 });
 
-function launch(t, job, { enabled = true } = {}) {
-  t.mock.method(pool, 'submitJob', (accountId) => ({
+// The pool worker's receipt: by default the root the job named and that root's HEAD
+// right after the run, as worker-core.ps1 records them.
+function headOf(dir) {
+  try {
+    return git(dir, 'rev-parse', 'HEAD');
+  } catch {
+    return undefined;
+  }
+}
+
+function launch(t, job, { enabled = true, receipt } = {}) {
+  t.mock.method(pool, 'submitJob', (accountId, submitted) => ({
     state: 'ok',
     exitCode: 0,
     accountId,
     jobId: accountId + '/run-1',
+    ...(receipt !== undefined
+      ? receipt
+      : submitted.cwd && fs.existsSync(submitted.cwd)
+        ? { cwd: submitted.cwd, headSha: headOf(submitted.cwd) }
+        : {}),
   }));
   t.mock.method(pool, 'readOutText', () => '{}');
   const snapshots = [quota(0.8, 1), quota(0.7, Date.now() + 60000)];
@@ -178,4 +193,33 @@ test('C1 scope: the recorded agy worker sha is the verified one, never the Contr
     controllerSha
   );
   assert.equal(base.length, 40);
+});
+
+test('C1 scope: the receipt binds root and head; a moved or foreign head is refused', (t) => {
+  const { dir, base } = repo(t);
+  const own = commit(dir, 'src/b.js', 'b\n');
+  // Receipt names this job's head, but another job committed on the shared root since.
+  const later = launch(t, { cwd: dir, baseSha: base }, { receipt: { cwd: dir, headSha: own } });
+  assert.equal(later.exitCode, 0, 'unchanged root: receipt head is current head');
+  const foreign = commit(dir, 'src/c.js', 'c\n');
+  const moved = launch(t, { cwd: dir, baseSha: base }, { receipt: { cwd: dir, headSha: own } });
+  assert.equal(moved.localFailure, 'AGY_WRITER_RECEIPT_HEAD_MISMATCH');
+  assert.equal(moved.workerSha, undefined);
+  // Receipt from the right job but naming another root (worker fell back to its mailbox).
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-other-'));
+  t.after(() => fs.rmSync(other, { recursive: true, force: true }));
+  const elsewhere = launch(
+    t,
+    { cwd: dir, baseSha: base },
+    { receipt: { cwd: other, headSha: foreign } }
+  );
+  assert.equal(elsewhere.localFailure, 'AGY_WRITER_RECEIPT_ROOT_MISMATCH');
+  const noRootInReceipt = launch(t, { cwd: dir, baseSha: base }, { receipt: { headSha: foreign } });
+  assert.equal(noRootInReceipt.localFailure, 'AGY_WRITER_RECEIPT_ROOT_MISSING');
+  const noHeadInReceipt = launch(t, { cwd: dir, baseSha: base }, { receipt: { cwd: dir } });
+  assert.equal(noHeadInReceipt.localFailure, 'AGY_WRITER_RECEIPT_HEAD_MISSING');
+  for (const r of [moved, elsewhere, noRootInReceipt, noHeadInReceipt]) {
+    assert.equal(r.exitCode, 1);
+    assert.equal(r.workerSha, undefined);
+  }
 });
