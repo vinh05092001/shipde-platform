@@ -463,14 +463,11 @@ test('committed JEV source activates the exact live mixed weighting through the 
       calls += 1;
     }),
   });
-  const options = { jevAsk: ask };
-  const assessment = await require('../writer-selection').assessOnce(
-    profile(),
-    source,
+  const assessment = await routing.assessTask(profile(), {
     ask,
-    options,
-    routing
-  );
+    source,
+    minConfidence: source && source.minConfidence,
+  });
   assert.equal(calls, 1);
   assert.equal(assessment.weightSource, 'mixed:jev-score+preset:BALANCED');
   assert.deepEqual(assessment.dimensionWeightSources, {

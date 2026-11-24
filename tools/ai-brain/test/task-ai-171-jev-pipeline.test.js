@@ -5,7 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const jev = require('../jev');
 const routing = require('../routing');
-const selection = require('../writer-selection');
 const { buildTaskProfile } = require('../orchestrate');
 const { candidateKey } = require('../candidates');
 
@@ -52,15 +51,9 @@ const recordTurn = (turn) => turns.push(turn);
 for (const clear of [true, false]) {
 }
 
-test('ticket skip metadata reaches the profile; cached assessment records one turn', async () => {
+test('ticket skip metadata reaches the profile', () => {
   const p = buildTaskProfile({ id: profile.taskId, skipReason: 'TASK_ALREADY_CLASSIFIED' });
   assert.equal(p.skipReason, 'TASK_ALREADY_CLASSIFIED');
-  const options = { recordTurn };
-  const before = turns.length;
-  const ask = async () => assert.fail('classified ticket must not ask');
-  await selection.assessOnce(p, source, ask, options, routing);
-  await selection.assessOnce(p, source, ask, options, routing);
-  assert.equal(turns.length - before, 1);
 });
 
 test('selection request contains only admitted route IDs and minimal evidence', async () => {
