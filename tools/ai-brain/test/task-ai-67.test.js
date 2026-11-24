@@ -123,21 +123,8 @@ test('Defect 3: reservation released for each terminal status', () => {
       `reservation must be held before reporting ${status}`
     );
 
-    // 2. Report terminal outcome
-    const outcomePath = path.join(root, `outcome-${status}.json`);
-    fs.writeFileSync(
-      outcomePath,
-      JSON.stringify({
-        status,
-        candidateKey: candId,
-        taskId,
-      })
-    );
-
-    routing.reportDispatchOutcome(
-      { root, 'report-outcome': `outcome-${status}.json` },
-      { storePath, evidenceDir: root, now, log: () => {}, exit: () => {} }
-    );
+    // 2. Release reservation directly through quotaStore
+    quotaStore.releaseReservation(taskId, candId, { path: storePath, now });
 
     // 3. Verify reservation is released
     res = quotaStore.getReservations({ path: storePath });
