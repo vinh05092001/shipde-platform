@@ -7,9 +7,9 @@ const path = require('node:path');
 
 const BRAIN_DIR = path.resolve(__dirname, '..');
 const comboReader = require('../combo-reader');
-const writerCombo = require('../writer-combo');
+const candidates = require('../candidates');
 
-test('TASK-AI-192 AC1: combo-reader.js exports match writer-combo.js re-exports and read fixture', async () => {
+test('TASK-AI-192 AC1: combo-reader.js exports read-only combo API and reads fixture', async () => {
   for (const name of [
     'resolveEndpoint',
     'assertLoopbackHost',
@@ -20,7 +20,6 @@ test('TASK-AI-192 AC1: combo-reader.js exports match writer-combo.js re-exports 
     'readComboConfig',
   ]) {
     assert.equal(typeof comboReader[name], 'function', `combo-reader.${name} must be a function`);
-    assert.equal(writerCombo[name], comboReader[name], `writer-combo.${name} must re-export`);
   }
 
   const res = await comboReader.readComboConfig({
@@ -29,35 +28,41 @@ test('TASK-AI-192 AC1: combo-reader.js exports match writer-combo.js re-exports 
   });
   assert.equal(res.state, 'READ');
   assert.deepEqual(res.members, ['grok-4.7', 'claude-4.5']);
-
-  // Regression: writer-combo.syncWriterCombo default evidenceDir still resolves path.join
-  await assert.rejects(
-    () =>
-      writerCombo.syncWriterCombo({
-        name: 'vinh',
-        host: '127.0.0.1',
-        port: 1,
-        protocol: 'http:',
-      }),
-    (err) => {
-      assert.notEqual(err.name, 'ReferenceError');
-      return true;
-    }
-  );
 });
 
-test('TASK-AI-192 AC2: live callers require combo-reader instead of writer-combo', () => {
-  for (const rel of ['intake.js', 'cli.js', 'cli/dispatch.js']) {
+test('TASK-AI-192 AC2 / Lat C-2: dead writer-combo.js is removed and candidates keeps predicates', () => {
+  assert.equal(
+    fs.existsSync(path.join(BRAIN_DIR, 'writer-combo.js')),
+    false,
+    'writer-combo.js must be deleted'
+  );
+  for (const rel of ['intake.js', 'cli.js', 'cli/dispatch.js', 'candidates.js']) {
     const src = fs.readFileSync(path.join(BRAIN_DIR, rel), 'utf8');
     assert.doesNotMatch(
       src,
       /require\(\s*['"]\.{1,2}\/writer-combo['"]\s*\)/,
       `${rel} should not require writer-combo.js`
     );
+  }
+  for (const rel of ['intake.js', 'cli.js', 'cli/dispatch.js']) {
+    const src = fs.readFileSync(path.join(BRAIN_DIR, rel), 'utf8');
     assert.match(
       src,
       /require\(\s*['"]\.{1,2}\/combo-reader['"]\s*\)/,
       `${rel} should require combo-reader.js`
     );
   }
+  assert.equal(candidates.isNineRouterCandidate({ gateway: '9router', modelId: 'x/y' }), true);
+  assert.equal(candidates.isNineRouterCandidate({ gateway: 'agy-pool', modelId: 'gemini' }), false);
+  assert.equal(
+    candidates.isIndividualNineRouterCandidate({ gateway: '9router', modelId: 'vinh' }, 'vinh'),
+    false
+  );
+  assert.equal(
+    candidates.isIndividualNineRouterCandidate(
+      { gateway: '9router', modelId: 'bzl/glm-5' },
+      'vinh'
+    ),
+    true
+  );
 });

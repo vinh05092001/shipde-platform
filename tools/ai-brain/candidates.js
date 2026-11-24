@@ -16,11 +16,37 @@
  */
 
 const evidence = require('./evidence');
-const comboLib = require('./writer-combo');
 const { candidateKey } = require('./discovery/identity');
 
-const isNineRouterCandidate = comboLib.isNineRouterCandidate;
-const isIndividualNineRouterCandidate = comboLib.isIndividualNineRouterCandidate;
+function isNineRouterCandidate(c) {
+  if (!c || typeof c !== 'object') return false;
+  return Boolean(
+    c.gateway === '9router' ||
+    c.source === '9router' ||
+    c.sourceId === '9router' ||
+    c.reachedVia === '9router' ||
+    c.gateway === 'opencode-provider-ninerouter-options' ||
+    c.source === 'opencode-provider-ninerouter-options' ||
+    c.sourceId === 'opencode-provider-ninerouter-options' ||
+    c.upstream === 'ninerouter' ||
+    c.upstream === '9router' ||
+    (typeof c.modelId === 'string' &&
+      (c.modelId.startsWith('ninerouter/') || c.modelId.startsWith('9router/'))) ||
+    c.accountId === 'ninerouter' ||
+    c.quotaScope === 'ninerouter'
+  );
+}
+
+function isIndividualNineRouterCandidate(c, comboName) {
+  if (!isNineRouterCandidate(c)) return false;
+  if (c.comboMembers) return false;
+  if (comboName) {
+    if (c.modelId === comboName) return false;
+    if (c.modelId === `ninerouter/${comboName}` || c.modelId === `9router/${comboName}`)
+      return false;
+  }
+  return true;
+}
 
 // direct-http and opencode-direct reach the same endpoint, gateway, account and
 // model; a capability proved on one route is the same model capability on the other.
