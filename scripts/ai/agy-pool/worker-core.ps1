@@ -57,8 +57,11 @@ if ($job.jobId) { $resultRecord.jobId = [string]$job.jobId }
 # rather than whatever the root holds later. A root that is not a git checkout records
 # no head, and the controller then refuses the writer commit.
 if (-not $job.command) {
-  $resultRecord.cwd = [string](Resolve-Path -LiteralPath $cwd).Path
-  $head = & git -c 'safe.directory=*' -C $cwd rev-parse HEAD 2>$null
+  $resolvedCwd = [string](Resolve-Path -LiteralPath $cwd).Path
+  $resultRecord.cwd = $resolvedCwd
+  # Trust only this job's root for the read, not every repository on the machine.
+  $safeDir = $resolvedCwd -replace '\\', '/'
+  $head = & git -c "safe.directory=$safeDir" -C $resolvedCwd rev-parse HEAD 2>$null
   if ($LASTEXITCODE -eq 0 -and "$head".Trim() -match '^[0-9a-fA-F]{40}$') { $resultRecord.headSha = "$head".Trim() }
 }
 
