@@ -194,16 +194,6 @@ function extractChangeLines(diffText) {
     .trim();
 }
 
-/** Normalize diff text, stripping volatile git index headers while preserving files, modes, binary markers, and all change lines. */
-function normalizeDiff(diffText) {
-  if (typeof diffText !== 'string' || !diffText.trim()) return '';
-  return diffText
-    .split(/\r?\n/)
-    .filter((line) => !line.startsWith('index '))
-    .join('\n')
-    .trim();
-}
-
 /**
  * GM-R02: when a merge commit of origin/main is needed (branch behind), it is
  * allowed only if the changes against main are byte-identical to the reviewed
@@ -1368,7 +1358,6 @@ module.exports = {
   findReviewArtifact,
   extractChangeLines,
   hasBinaryOrModeChanges,
-  normalizeDiff,
   checkByteIdenticalMerge,
   validatePrTitle,
   isCheckSuccess,

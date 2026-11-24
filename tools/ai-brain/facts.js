@@ -74,20 +74,6 @@ function fileExists(relPath, rootDir) {
   }
 }
 
-/** Commits touching a path, newest first. Used to check that work left traces. */
-function commitsTouching(relPath, limit, cwd) {
-  const n = Number(limit) > 0 ? Number(limit) : 20;
-  const result = git(['log', '--format=%H%x1f%s', '-n', String(n), '--', relPath], cwd);
-  if (!result.ok || !result.out) return [];
-  return result.out
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      const [sha, subject] = line.split('');
-      return { sha, subject: subject || '' };
-    });
-}
-
 function currentBranch(cwd) {
   const r = git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
   return r.ok ? r.out : null;
@@ -144,7 +130,6 @@ module.exports = {
   isAncestorOf,
   branchExists,
   fileExists,
-  commitsTouching,
   currentBranch,
   headSha,
   runCheck,
