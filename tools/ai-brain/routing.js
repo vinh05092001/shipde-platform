@@ -26,20 +26,11 @@
  * refusal rule, not a routing choice.
  */
 
-const fs = require('fs');
-const path = require('path');
-
 const jev = require('./jev');
 const evidence = require('./evidence');
-const decisions = require('./decisions');
 const ranking = require('./ranking');
 const { loadPriors, priorFor } = require('./priors');
-const {
-  candidateKey,
-  parseCandidateKey,
-  registryPrefixes,
-  modelBase,
-} = require('./discovery/identity');
+const { candidateKey, registryPrefixes, modelBase } = require('./discovery/identity');
 const sourceRegistry = require('./sources');
 const BACKEND_MODEL_PREFIXES = registryPrefixes(sourceRegistry.loadSources());
 const { contextRefusal, hasLauncherWriter } = require('./harness');
