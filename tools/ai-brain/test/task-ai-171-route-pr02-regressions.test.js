@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { dispatchCommand, dispatchProfileCommand } = require('../cli');
+const { dispatchProfileCommand } = require('../cli');
 const evidence = require('../evidence');
 const routing = require('../routing');
 const { buildTaskProfile } = require('../orchestrate');

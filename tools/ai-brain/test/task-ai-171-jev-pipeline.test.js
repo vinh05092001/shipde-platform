@@ -5,7 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const jev = require('../jev');
 const routing = require('../routing');
-const { dispatchCommand } = require('../cli');
 const selection = require('../writer-selection');
 const { buildTaskProfile } = require('../orchestrate');
 const { candidateKey } = require('../candidates');

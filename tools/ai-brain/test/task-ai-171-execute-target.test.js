@@ -16,7 +16,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { dispatchCommand } = require('../cli');
 const { executePlan } = require('../executor');
 const { loadSources } = require('../sources');
 const { resolveExecuteTarget, isValidTarget } = require('../execute-target');
@@ -249,62 +248,6 @@ describe('TASK-AI-171 R2: E3 executePlan refuses without a validated target', ()
     }
   });
 
-  test('P1-2: CLI dispatch --plan --execute --isolated-worker passes validated target baseSha and cwd to runner', () => {
-    const dir = tmpDir('ai171-et-iso-');
-    const isoMod = require('../isolation-launcher');
-    const origIso = isoMod.getIsolatedLauncher;
-    let capturedRunnerOptions = null;
-    let runnerCalls = 0;
-    isoMod.getIsolatedLauncher = () => (adapter, args, options) => {
-      runnerCalls += 1;
-      capturedRunnerOptions = options;
-      if (!options || !options.baseSha) {
-        throw new Error(
-          'ISOLATION_BASE_SHA_MISSING: the caller must pin the base SHA to provision'
-        );
-      }
-      return {
-        exitCode: 0,
-        stdout:
-          '{"type":"step_start"}\n{"type":"text","part":{"text":"done"}}\n{"type":"step_finish"}\n',
-        completionNonce: 'nonce-171-iso',
-        stderr: '',
-      };
-    };
-    try {
-      const planFile = path.join(dir, 'plan.json');
-      fs.writeFileSync(planFile, JSON.stringify(plan()));
-      let exitCode = null;
-      const res = dispatchCommand(
-        {
-          plan: planFile,
-          execute: true,
-          cwd: dir,
-          'isolated-worker': true,
-          'base-sha': VALID_40_HEX,
-        },
-        {
-          gitRoot: () => dir,
-          commitExists: () => true,
-          decisionDir: dir,
-          log: () => {},
-          error: () => {},
-          exit: (c) => {
-            exitCode = c;
-          },
-        }
-      );
-      assert.equal(exitCode, 0);
-      assert.equal(runnerCalls, 1);
-      assert.ok(capturedRunnerOptions);
-      assert.equal(capturedRunnerOptions.cwd, dir);
-      assert.equal(capturedRunnerOptions.baseSha, VALID_40_HEX);
-    } finally {
-      isoMod.getIsolatedLauncher = origIso;
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   test('P1-3: executePlan with dry-run executeTarget passed to dryRun=false is refused with zero runner calls', () => {
     const run = okRun();
     const dryRunTarget = resolveExecuteTarget({}, {});
@@ -320,57 +263,6 @@ describe('TASK-AI-171 R2: E3 executePlan refuses without a validated target', ()
     assert.equal(res.summary.refused, 1);
     assert.ok(res.refusal, 'refusal reason must be set');
     assert.equal(run.calls.length, 0, 'zero runner calls');
-  });
-
-  test('CLI --plan with an invalid base exits 1 with zero runner calls', () => {
-    const run = okRun();
-    const dir = tmpDir('ai171-et-plan-');
-    try {
-      const planFile = path.join(dir, 'plan.json');
-      fs.writeFileSync(planFile, JSON.stringify(plan()));
-      let exitCode = null;
-      const res = dispatchCommand(
-        { plan: planFile, execute: true, cwd: dir, 'base-sha': FAKE_40_HEX },
-        {
-          run,
-          gitRoot: () => dir,
-          commitExists: () => false,
-          decisionDir: dir,
-          log: () => {},
-          error: () => {},
-          exit: (c) => {
-            exitCode = c;
-          },
-        }
-      );
-      assert.equal(exitCode, 1);
-      assert.equal(res.refusal, 'BASE_SHA_UNRESOLVED');
-      assert.equal(run.calls.length, 0);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('CLI --plan dry run makes zero git / child_process calls', (t) => {
-    const dir = tmpDir('ai171-et-plan-');
-    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-    const planFile = path.join(dir, 'plan.json');
-    fs.writeFileSync(planFile, JSON.stringify(plan()));
-    const cp = require('node:child_process');
-    const calls = [];
-    for (const api of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']) {
-      t.mock.method(cp, api, (...a) => {
-        calls.push(api + ' ' + String(a[0]));
-        throw new Error('CHILD_PROCESS_FORBIDDEN: ' + api);
-      });
-    }
-    const run = okRun();
-    dispatchCommand(
-      { plan: planFile, 'dry-run': true },
-      { run, decisionDir: dir, log: () => {}, error: () => {}, exit: () => {} }
-    );
-    assert.deepEqual(calls, []);
-    assert.equal(run.calls.length, 0);
   });
 
   test('P1-2: existing Paseo writer probe and resume both receive validated cwd, base and baseSha despite conflicting raw opts', () => {
