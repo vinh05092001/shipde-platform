@@ -15,7 +15,7 @@
  *     451 → REGION
  *     503 → NO_CHANNEL
  * - Persists quota state to data/quota-state.json with timestamp and retryAfter.
- * - capability-probe and probe-order / dry-run consult quota-state.json to skip dead scopes.
+ * - probe-order and dry-run consult quota-state.json to skip dead scopes.
  */
 
 const fs = require('fs');

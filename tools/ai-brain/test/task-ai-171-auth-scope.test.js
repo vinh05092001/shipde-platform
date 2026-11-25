@@ -3,7 +3,6 @@ const assert = require('node:assert');
 const { classifyFailure, upstreamAuthSignal } = require('../failure-classifier');
 const { sameFailureDomain } = require('../routing');
 const evidence = require('../evidence');
-const { orderCandidatesForProbe } = require('../capability-probe');
 const key = 'gw-shared-key';
 const via = { harness: 'paseo', gateway: 'gw', accountId: key, quotaScope: key };
 const A = { ...via, upstream: 'up-a', modelId: 'up-a/m', offeringId: 'a' };
@@ -222,31 +221,6 @@ test('a direct source keeps its old auth behaviour, even with a tagged error', (
   const quotaState = { scopes: { d: row, 'd::d': row } };
   const sibling = { ...route, modelId: 'd/n' };
   assert.equal(evidence.isCandidateBlocked({}, sibling, { quotaState }).blocked, true);
-});
-
-const probeRow = {
-  source: 'gw',
-  scope: 'gw::up-a',
-  upstream: 'up-a',
-  model: 'up-a/m',
-  code: 'AUTH',
-  status: 401,
-  at: new Date().toISOString(),
-  ttlMs: 3600000,
-};
-
-test('capability-probe keeps a sibling model and refuses the probed one', () => {
-  const quotaState = { scopes: { 'gw::up-a': probeRow } };
-  const held = { ...A2, blocked: true, blockScope: 'quota-scope', blockReason: 'old' };
-  const ordered = orderCandidatesForProbe([{ ...A }, held, { ...B }], null, {
-    quotaState,
-    probeRoundRobinBatch: 1,
-    priors: null,
-  });
-  const of = (id) => ordered.find((c) => c.modelId === id);
-  assert.equal(of('up-a/m').blocked, true);
-  assert.notEqual(of('up-a/n').blocked, true);
-  assert.notEqual(of('up-b/m').blocked, true);
 });
 
 test('a connection layer without a confirmed ID stays unknown', () => {

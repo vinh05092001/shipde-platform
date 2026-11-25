@@ -2,7 +2,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { candidateKey } = require('../discovery/identity');
-const cap = require('../capability-probe');
 const order = require('../probe-order');
 const c = {
   harness: 'agy-pool',
@@ -16,51 +15,6 @@ const c = {
 function combination(patch = {}, evidence = [{ proofLevel: 'WORK_ITEM_PASS' }]) {
   return { ...c, model: c.modelId, ...patch, evidence };
 }
-
-test('work proof never crosses source, upstream, full model, account, quota, path or harness identity', () => {
-  assert.equal(cap.hasPriorWorkPass(c, [combination()]), true);
-  for (const patch of [
-    { gateway: '' },
-    { gateway: 'source-b' },
-    { upstream: 'vendor-b' },
-    { modelId: 'vendor-b/model', model: 'vendor-b/model' },
-    { sourceId: 'different-source' },
-    { accountId: '*' },
-    { quotaScope: '' },
-    { accessPath: 'other' },
-    { harness: 'opencode' },
-  ]) {
-    assert.equal(cap.hasPriorWorkPass(c, [combination(patch)]), false, JSON.stringify(patch));
-  }
-});
-
-test('API proof cannot short circuit writer capability verification', async () => {
-  for (const e of [
-    { status: 'passed', level: 1 },
-    { status: 'passed', level: 'API' },
-    { proofLevel: 'API_PASS' },
-  ]) {
-    assert.equal(cap.hasPriorWorkPass(c, [combination({}, [e])]), false);
-  }
-});
-
-test('probe order uses measured elapsed cost and configured fallback independent of harness name', () => {
-  const slow = { ...c, elapsedMs: 700 };
-  const fast = { ...c, harness: 'unlisted-harness', modelId: 'different', elapsedMs: 30 };
-  const unknown = { ...c, harness: 'codex', modelId: 'unknown' };
-  assert.deepEqual(
-    cap.orderCandidatesForProbe(
-      [slow, unknown, fast],
-      { role: 'writer' },
-      {
-        registry: { sources: [], dispatch: { probeTimeoutMs: 100 } },
-        routeHealth: { paths: {} },
-        capabilityEvidence: {},
-      }
-    ),
-    [fast, unknown, slow]
-  );
-});
 
 test('representative rejections cover arbitrary harness and reason without named lane quotas', () => {
   const rows = Array.from({ length: 40 }, (_, i) => ({
