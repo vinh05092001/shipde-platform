@@ -87,7 +87,14 @@ function resolveLauncher(o, isolatedLauncher) {
         ...o,
         timeoutMs: poolTimeoutMs,
       });
-      const runEndedAt = Date.now();
+      const submitReturnedAt = Date.now();
+      const parsedPromptEndedAt =
+        result && typeof result.promptEndedAt === 'string' && result.promptEndedAt.trim()
+          ? Date.parse(result.promptEndedAt)
+          : Number.NaN;
+      const runEndedAt = Number.isFinite(parsedPromptEndedAt)
+        ? parsedPromptEndedAt
+        : submitReturnedAt;
       const launched = {
         ...result,
         exitCode: result.state === 'ok' ? result.exitCode : result.exitCode || 1,

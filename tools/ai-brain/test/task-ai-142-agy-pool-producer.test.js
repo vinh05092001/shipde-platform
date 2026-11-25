@@ -196,3 +196,157 @@ test(
     }
   }
 );
+
+test(
+  'producer -> consumer: promptEndedAt precedes real quota-out.txt mtime so writer-loop verifies group evidence',
+  { skip },
+  () => {
+    const { resolveLauncher } = require('../orchestrate/writer-loop');
+    const agyCandidates = require('../agy-pool-candidates');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-producer-mtime-'));
+    const profile = path.join(root, 'profile');
+    const dir = path.join(root, 'agy04');
+    const work = path.join(root, 'work');
+    fs.mkdirSync(profile, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(work, { recursive: true });
+
+    const beforeQuotaJson = JSON.stringify({
+      command: {
+        data: {
+          groups: [
+            {
+              name: 'Claude and GPT models',
+              description: 'Models within this group: Claude Opus 5.5',
+              buckets: [{ id: '3p-5h', window: '5h', remaining_fraction: 0.9 }],
+            },
+          ],
+        },
+      },
+    });
+    const afterQuotaJson = JSON.stringify({
+      command: {
+        data: {
+          groups: [
+            {
+              name: 'Claude and GPT models',
+              description: 'Models within this group: Claude Opus 5.5',
+              buckets: [{ id: '3p-5h', window: '5h', remaining_fraction: 0.85 }],
+            },
+          ],
+        },
+      },
+    });
+
+    // Seed pre-run quota-out.txt with a real mtime strictly before the run starts.
+    const quotaOutPath = path.join(dir, 'quota-out.txt');
+    fs.writeFileSync(quotaOutPath, beforeQuotaJson, 'utf8');
+    const past = new Date(Date.now() - 5000);
+    fs.utimesSync(quotaOutPath, past, past);
+
+    // Git checkout with a clean in-scope commit so F2 scope check also passes.
+    const git = (...args) =>
+      spawnSync('git', ['-c', 'safe.directory=*', '-C', work, ...args], { encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'fixture@example.invalid');
+    git('config', 'user.name', 'fixture');
+    fs.writeFileSync(path.join(work, 'a.txt'), 'base\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'base');
+    const baseSha = git('rev-parse', 'HEAD').stdout.trim();
+    fs.writeFileSync(path.join(work, 'a.txt'), 'updated\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'writer change');
+    const expectedHead = git('rev-parse', 'HEAD').stdout.trim();
+
+    // Stand-in agy binary: returns prompt output for normal runs and drained quota JSON for /quota.
+    const afterFile = path.join(root, 'after-quota.json');
+    fs.writeFileSync(afterFile, afterQuotaJson, 'utf8');
+    let agy;
+    if (isWin) {
+      agy = path.join(root, 'agy.cmd');
+      fs.writeFileSync(
+        agy,
+        `@echo off\r\necho %* | findstr /C:"/quota" >nul\r\nif %ERRORLEVEL%==0 (\r\n  type "${afterFile}"\r\n) else (\r\n  echo {"status":"SUCCESS","response":"done"}\r\n)\r\n`
+      );
+    } else {
+      agy = path.join(root, 'agy');
+      fs.writeFileSync(
+        agy,
+        `#!/bin/sh\ncase "$*" in\n  *"/quota"*) cat '${afterFile}' ;;\n  *) echo '{"status":"SUCCESS","response":"done"}' ;;\nesac\n`
+      );
+      fs.chmodSync(agy, 0o755);
+    }
+
+    const adapter = path.join(root, 'adapter.js');
+    fs.writeFileSync(
+      adapter,
+      [
+        "const { spawnSync } = require('child_process');",
+        "const path = require('path');",
+        'const [runDir, name] = process.argv.slice(2);',
+        `const res = spawnSync(${JSON.stringify(shell)}, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ${JSON.stringify(producer)}, '-Name', name, '-RunsDir', path.dirname(runDir), '-AgyExe', ${JSON.stringify(agy)}], { stdio: 'inherit', env: { ...process.env, USERPROFILE: ${JSON.stringify(profile)}, HOME: ${JSON.stringify(profile)} } });`,
+        'process.exit(res.status === null ? 1 : res.status);',
+      ].join('\n')
+    );
+
+    try {
+      const launcher = resolveLauncher(
+        {
+          externalWorkers: 'agy-pool',
+          allowAgyPoolWriter: true,
+          fakeRunsDir: root,
+          adapterScript: adapter,
+          adapterTimeoutMs: 120000,
+          poolTimeoutMs: 30000,
+          pollIntervalMs: 10,
+        },
+        null
+      );
+
+      const launched = launcher({
+        harness: 'agy-pool',
+        accountId: 'agy04',
+        model: 'claude-opus-5.5',
+        quotaScope: 'agy04:3p',
+        prompt: 'apply change',
+        cwd: work,
+        workerRoot: work,
+        baseSha,
+        allowedPaths: ['a.txt'],
+        labels: { role: 'writer' },
+      });
+
+      assert.equal(launched.exitCode, 0, launched.stderr);
+      assert.equal(launched.workerSha, expectedHead);
+      assert.ok(launched.promptEndedAt, 'receipt must include promptEndedAt');
+      const promptEndedMs = Date.parse(launched.promptEndedAt);
+      const afterMtimeMs = fs.statSync(quotaOutPath).mtimeMs;
+      assert.ok(
+        Number.isFinite(promptEndedMs) && promptEndedMs <= afterMtimeMs,
+        `expected promptEndedAt (${promptEndedMs}) <= quota-out.txt mtime (${afterMtimeMs})`
+      );
+      assert.equal(launched.identityProof.groupVerified, true);
+      assert.equal(launched.identityProof.error || null, null);
+
+      // Ordering guard: if promptEndedAt is after quotaAfter.at, verifier reports stale evidence.
+      const stale = agyCandidates.verifyAgyServedIdentity({
+        requestedModel: 'claude-opus-5.5',
+        expectedBucket: '3p',
+        quotaBefore: {
+          groups: JSON.parse(beforeQuotaJson).command.data.groups,
+          at: past.getTime(),
+        },
+        quotaAfter: agyCandidates.readAccountQuotaSnapshot('agy04', { fakeRunsDir: root }),
+        receipt: { accountId: 'agy04', jobId: launched.jobId },
+        accountId: 'agy04',
+        runStartedAt: past.getTime() + 1000,
+        runEndedAt: afterMtimeMs + 5000,
+      });
+      assert.equal(stale.groupVerified, false);
+      assert.equal(stale.error, 'AGY_QUOTA_SNAPSHOT_STALE');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+);

@@ -52,6 +52,11 @@ $resultRecord = [ordered]@{ name = $Name; state = $state; exitCode = $p.ExitCode
 # Echo the submitted job identity so the controller never takes a late prior run's
 # result as the current job's output.
 if ($job.jobId) { $resultRecord.jobId = [string]$job.jobId }
+# Capture prompt completion time strictly before the post-run /quota probe so
+# the controller's before <= start <= promptEndedAt <= after bracketing
+# checks the real prompt window instead of post-barrier submitJob return time.
+$resultRecord.promptEndedAt = [DateTimeOffset]::UtcNow.ToString('o')
+
 # Receipt binding for a prompt job: the root this job actually ran in and the HEAD it
 # left there, so the controller checks a writer's commit against this job's own record
 # rather than whatever the root holds later. A root that is not a git checkout records
