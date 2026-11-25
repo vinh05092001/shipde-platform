@@ -1,8 +1,5 @@
 'use strict';
 
-// API contract (HTTP 400 "Too many score levels. Must have at most 10 levels."), not a tuning value.
-const JEV_MAX_SCORE_LEVELS = 10;
-
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -152,29 +149,6 @@ function normalizeAdvice(raw, key) {
   if (!raw || typeof raw !== 'object') return raw;
   if (raw.choice !== undefined || raw.confidence !== undefined) return raw;
   if (raw.answers && typeof raw.answers === 'object') {
-    const dimensions = ['qualityImportance', 'latencyImportance', 'costImportance'];
-    const scores = {};
-    for (const name of dimensions) {
-      const answer = raw.answers[name];
-      if (answer && answer.type === 'score') {
-        scores[name] = {
-          score: answer.score,
-          distribution: answer.distribution || answer.probabilities,
-          confidence: answer.confidence,
-        };
-      }
-    }
-    if ((!key || key === 'weightProfile') && Object.keys(scores).length) {
-      const legacy = raw.answers.weightProfile;
-      return {
-        scores,
-        choice: legacy && legacy.choice,
-        confidence: legacy && legacy.confidence,
-        probabilities: legacy && legacy.probabilities,
-        jevModel: raw.model || null,
-        usage: raw.usage || null,
-      };
-    }
     const answer = key
       ? raw.answers[key]
       : raw.answers.weightProfile ||
@@ -257,40 +231,6 @@ function buildJevAsk(source, options) {
         criteria,
       },
     };
-    if (question.kind === 'assess-task-profile') {
-      for (const dimension of question.scoreDimensions || []) {
-        const name = dimension.name;
-        const state = question.state || {};
-        // The JEV API accepts at most JEV_MAX_SCORE_LEVELS levels; scores are only
-        // used as ratios between dimensions, so the scale itself carries no meaning.
-        const levels = Array.from({ length: JEV_MAX_SCORE_LEVELS }, (_, score) => {
-          const third = JEV_MAX_SCORE_LEVELS / 3;
-          const emphasis = score < third ? 'low' : score < 2 * third ? 'moderate' : 'high';
-          return (
-            score +
-            ': ' +
-            emphasis +
-            ' priority for ' +
-            name.replace('Importance', '') +
-            ' given task class ' +
-            String(state.taskClass || 'unknown') +
-            ', difficulty ' +
-            String(state.difficulty || 'unknown') +
-            ', risks ' +
-            ((state.riskDomains || []).join(', ') || 'none') +
-            ', deadline priority ' +
-            String(state.latencyPriority || 'normal') +
-            ', deadline/expected duration ' +
-            String(state.deadline || state.expectedDuration || 'unspecified') +
-            ', budget ' +
-            String(state.costCeiling === undefined ? 'unspecified' : state.costCeiling)
-          );
-        });
-        // The API's ScoreQuestion takes the ordered rubric as `criteria` (index = score);
-        // an unknown `levels` field leaves `criteria` missing and the API answers HTTP 422.
-        questions[name] = { type: 'score', instructions: dimension.instructions, criteria: levels };
-      }
-    }
     const raw = await postJson(
       endpoint,
       {
@@ -376,10 +316,6 @@ async function evaluateAdvice(question, options) {
     opts.minConfidence != null && Number.isFinite(Number(opts.minConfidence))
       ? Number(opts.minConfidence)
       : DEFAULT_MIN_CONFIDENCE;
-  const scoreMinConfidence =
-    opts.scoreMinConfidence != null && Number.isFinite(Number(opts.scoreMinConfidence))
-      ? Number(opts.scoreMinConfidence)
-      : minConfidence;
   const ask = opts.ask;
   if (typeof ask !== 'function') return undecided('UNREACHABLE');
 
@@ -392,7 +328,6 @@ async function evaluateAdvice(question, options) {
       evidence: String(question.evidence),
       options: question.options.slice(),
       state: question.state,
-      scoreDimensions: question.scoreDimensions,
     });
   } catch (err) {
     return undecided(failureReason(err));
@@ -400,41 +335,6 @@ async function evaluateAdvice(question, options) {
 
   if (!raw || typeof raw !== 'object') return undecided('MALFORMED_OUTPUT');
   if (advisoryNamesIdentity(raw)) return undecided('IDENTITY_PROHIBITED');
-  if (question.kind === 'assess-task-profile' && raw.scores && typeof raw.scores === 'object') {
-    const scoreNames = ['qualityImportance', 'latencyImportance', 'costImportance'];
-    const scores = {};
-    let confidentDimensions = 0;
-    for (const name of scoreNames) {
-      const item = raw.scores[name];
-      const score = Number(item && item.score);
-      const confidence = Number(item && item.confidence);
-      if (!Number.isFinite(score) || score < 0 || score > 10 || !Number.isFinite(confidence)) {
-        return Object.assign(undecided('MALFORMED_OUTPUT'), {
-          choice: raw.choice || null,
-          scores: Object.keys(scores).length ? scores : null,
-        });
-      }
-      if (confidence >= scoreMinConfidence) confidentDimensions += 1;
-      scores[name] = { score, confidence, distribution: item.distribution || null };
-    }
-    if (confidentDimensions === 0) {
-      return Object.assign(undecided('LOW_CONFIDENCE'), {
-        choice: raw.choice || null,
-        confidence: Math.min(...scoreNames.map((name) => scores[name].confidence)),
-        scores,
-        jevModel: raw.jevModel || null,
-        usage: raw.usage || null,
-      });
-    }
-    return {
-      outcome: Outcome.DECIDED,
-      choice: raw.choice || null,
-      confidence: Math.min(...scoreNames.map((name) => scores[name].confidence)),
-      scores,
-      jevModel: raw.jevModel || null,
-      usage: raw.usage || null,
-    };
-  }
   const choice = raw.choice === undefined ? null : String(raw.choice);
   const confidence = Number(raw.confidence);
   if (!question.options.includes(choice)) return undecided('MALFORMED_OUTPUT');
