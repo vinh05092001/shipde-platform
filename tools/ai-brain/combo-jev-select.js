@@ -17,6 +17,7 @@ const comboReader = require('./combo-reader');
 const priorsRead = require('./priors-read');
 const jev = require('./jev');
 const sourcesApi = require('./sources');
+const agyPoolCandidates = require('./agy-pool-candidates');
 const { candidateKey } = require('./discovery/identity');
 
 const EFFORT_RANK = Object.freeze({
@@ -205,9 +206,19 @@ function shortlistForJev(eligibleMembers, maxOptions) {
     picked.push(idx);
     seenEffort.add(String(list[idx].effort || 'default').toLowerCase());
   };
-  // Always keep the top half purely by benchmark rank, then fill distinct efforts, then remaining rank.
+  // Always keep the top half purely by benchmark rank, then make sure every lane
+  // (9router, agy-pool) has a slot, then fill distinct efforts, then remaining rank.
+  // With one lane the lane step adds nothing, so a 9router-only list is unchanged.
   const topRankSlots = Math.max(2, Math.ceil(cap / 2));
   for (let i = 0; i < list.length && picked.length < topRankSlots; i += 1) addAt(i);
+  const seenLane = new Set(picked.map((idx) => list[idx].lane || '9router'));
+  for (let i = 0; i < list.length && picked.length < cap; i += 1) {
+    const lane = list[i].lane || '9router';
+    if (!seenLane.has(lane)) {
+      seenLane.add(lane);
+      addAt(i);
+    }
+  }
   for (let i = 0; i < list.length && picked.length < cap; i += 1) {
     const eff = String(list[i].effort || 'default').toLowerCase();
     if (!seenEffort.has(eff)) addAt(i);
@@ -259,6 +270,7 @@ function buildJevComboQuestion(assessment, eligibleMembers) {
       tier: m.tier,
       reasoningEffort: m.effort || 'default',
       priorUnknown: m.priorUnknown,
+      ...(m.headroomStatus ? { headroomStatus: m.headroomStatus } : {}),
     });
     criteria[optId] = formatMemberCriterion(optId, m);
   }
@@ -329,14 +341,56 @@ async function selectComboMember(options = {}) {
 
   const members = rawMembers.filter((m) => typeof m === 'string' && m.trim()).map((m) => m.trim());
 
+  // One cap for the JEV shortlist, from the JEV resolver (an integer >= 2, or none).
+  const jevMaxOptions = resolveJevMaxOptions(options);
+
+  const requestedAgyPool =
+    options.includeAgyPool === true ||
+    Boolean(
+      options.registry &&
+      options.registry.dispatch &&
+      options.registry.dispatch.agyPoolShortlistEnabled
+    );
+  // Fail-closed: mixed shortlist opt-in requires an explicit integer cap >= 2 so an
+  // unbounded multi-lane pool is never sent to JEV when maxOptions is missing or invalid.
+  const includeAgyPool = requestedAgyPool && jevMaxOptions !== null;
+  const agyByModelId = new Map();
+  if (includeAgyPool) {
+    const agyOpts = Object.assign({}, options.agyPoolOptions || {}, {
+      registry: (options.agyPoolOptions && options.agyPoolOptions.registry) || options.registry,
+    });
+    const agyMembers = agyPoolCandidates.discoverAgyPoolMembers(agyOpts);
+    for (const am of agyMembers) {
+      agyByModelId.set(am.modelId, am);
+    }
+  }
+  const combinedMemberIds = [...members, ...Array.from(agyByModelId.keys())];
+
   const scored =
-    members.length > 0
-      ? priorsRead.scoreComboMembers(members, assessment.role, {
-          priors: options.priors,
-          priorsFile: options.priorsFile,
-          registry: options.registry,
-          now: options.now,
-        })
+    combinedMemberIds.length > 0
+      ? priorsRead
+          .scoreComboMembers(combinedMemberIds, assessment.role, {
+            priors: options.priors,
+            priorsFile: options.priorsFile,
+            registry: options.registry,
+            now: options.now,
+          })
+          .map((item) => {
+            const agyMeta = agyByModelId.get(item.modelId);
+            return agyMeta
+              ? {
+                  ...item,
+                  lane: 'agy-pool',
+                  bareModel: agyMeta.bareModel,
+                  bucket: agyMeta.bucket,
+                  accountId: agyMeta.accountId,
+                  headroom: agyMeta.headroom,
+                  headroomStatus: agyMeta.headroomStatus,
+                  quotaScope: agyMeta.quotaScope,
+                  eligibleAccounts: agyMeta.eligibleAccounts,
+                }
+              : { ...item, lane: '9router' };
+          })
       : [];
 
   if (scored.length === 0) {
@@ -371,7 +425,7 @@ async function selectComboMember(options = {}) {
 
   const { eligible, independentApplied } =
     assessment.role === 'reviewer' && options.writerModelId
-      ? filterForIndependence(scored, options.writerModelId, members, fallbackUpstream)
+      ? filterForIndependence(scored, options.writerModelId, combinedMemberIds, fallbackUpstream)
       : { eligible: scored, independentApplied: false };
 
   if (eligible.length === 0) {
@@ -400,8 +454,7 @@ async function selectComboMember(options = {}) {
     shortlistCount = 1;
     shortlistOptions = ['M0'];
   } else if (typeof options.jevAsk === 'function') {
-    const maxOptions = resolveJevMaxOptions(options);
-    const shortlist = shortlistForJev(eligible, maxOptions);
+    const shortlist = shortlistForJev(eligible, jevMaxOptions);
     shortlistCount = shortlist.length;
     const { question, optionMap } = buildJevComboQuestion(assessment, shortlist);
     shortlistOptions = question.options.slice();
@@ -420,11 +473,14 @@ async function selectComboMember(options = {}) {
     handledBy = 'fallback';
   }
 
-  const built = buildMemberCandidate(chosen, {
-    registry: options.registry,
-    env: options.env,
-    comboName,
-  });
+  const built =
+    chosen.lane === 'agy-pool'
+      ? agyPoolCandidates.buildAgyMemberCandidate(chosen, { modelFamilyOf })
+      : buildMemberCandidate(chosen, {
+          registry: options.registry,
+          env: options.env,
+          comboName,
+        });
 
   return {
     ok: Boolean(built.candidate),
