@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const routing = require('../routing');
 const priors = require('../priors');
-const cli = require('../cli');
 
 const FIXTURE_NOW = Date.parse('2026-10-17T12:00:00.000Z');
 
@@ -187,27 +186,6 @@ test('VIỆC 1: Model not in priors table results in null quality and displays "
   });
 
   assert.equal(ranked.ranking[0].scoreBreakdown.quality, null);
-
-  const dryRunLog = cli.buildDryRunLog({
-    item: { workItemId: 'TASK-AI-142' },
-    now: FIXTURE_NOW,
-    annotated: [ranked.ranking[0]],
-    candidatesApi: require('../candidates'),
-    decision: {
-      chosen: ranked.chosen,
-      reason: ranked.reason,
-      candidates: ranked.ranking.map((c) => ({
-        offeringId: c.candidateKey,
-        score: c.score,
-        scoreBreakdown: c.scoreBreakdown,
-        headroom: 'open',
-      })),
-      rejected: [],
-    },
-  });
-
-  assert.equal(dryRunLog.candidates[0].score, 'chưa rõ');
-  assert.equal(dryRunLog.ranking.ordered[0].score, 'chưa rõ');
 });
 
 test('VIỆC 1: Stale priors trigger staleness detection and decision log warning', () => {

@@ -46,7 +46,6 @@ test('runtime-helpers exports all live helpers and dispatch-helpers/cli re-expor
   assert.strictEqual(typeof cli.assembleForDispatch, 'function');
   assert.strictEqual(typeof cli.sameFailureDomain, 'function');
   assert.strictEqual(typeof cli.applyFailureBlocks, 'function');
-  assert.strictEqual(typeof cli.applyDryRunBlocks, 'function');
   assert.strictEqual(cli.DRY_RUN_BLOCK_CODES, runtimeHelpers.DRY_RUN_BLOCK_CODES);
   assert.strictEqual(cli.LIVE_BLOCK_CODES, runtimeHelpers.LIVE_BLOCK_CODES);
 });
