@@ -375,25 +375,6 @@ async function adviseOrReason(question, options) {
   };
 }
 
-function roleQuestion(workItem, roles) {
-  const ids = Object.keys(roles || {});
-  return {
-    kind: 'classify-work-item-role',
-    prompt: 'Pick the registered role for this Work Item.',
-    evidence: JSON.stringify(workItem || {}),
-    options: ids,
-  };
-}
-
-function transcriptQuestion(transcript, states) {
-  return {
-    kind: 'classify-transcript',
-    prompt: 'Classify this transcript state.',
-    evidence: String(transcript || ''),
-    options: states || ['RUNNING_WITH_PROGRESS', 'STALLED', 'FAILED', 'COMPLETED'],
-  };
-}
-
 module.exports = {
   DEFAULT_HTTP_TIMEOUT_MS,
   Outcome,
@@ -406,7 +387,5 @@ module.exports = {
   buildAskFromSource,
   advise,
   adviseOrReason,
-  roleQuestion,
-  transcriptQuestion,
   normalizeAdvice,
 };

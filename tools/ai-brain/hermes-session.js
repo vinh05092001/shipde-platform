@@ -186,10 +186,6 @@ function configFilePath(rootDir) {
   return path.join(getHermesHomeDir(rootDir), 'config.yaml');
 }
 
-function legacyConfigFilePath(rootDir) {
-  return path.join(getHermesDir(rootDir), 'config.yaml');
-}
-
 function skillFilePath(rootDir) {
   return path.join(
     path.resolve(rootDir || process.cwd()),
@@ -588,17 +584,6 @@ function recordFsCheckError(targetPath, err, context) {
   return reason;
 }
 
-function getFsCheckReasons() {
-  return _defaultTracker.get();
-}
-
-function clearFsCheckReasons() {
-  _defaultTracker.clear();
-  lastFsErrorReason = null;
-  fileExists.lastReason = null;
-  dirExists.lastReason = null;
-}
-
 function fileExists(filePath, fsApi, options) {
   const f = fsApi || fs;
   try {
@@ -790,41 +775,6 @@ function hasCodexAuth(options, deps) {
     recordFsCheckError(authFile, err, 'hasCodexAuth');
     return false;
   }
-}
-
-function parseCodexModelsFromToml(content) {
-  if (typeof content !== 'string') return ['gpt-6.1-sol'];
-  const match = content.match(/(?:^|\r?\n)\s*model\s*=\s*(\[[^\]]*\]|"[^"]*"|'[^']*')/);
-  if (!match) return ['gpt-6.1-sol'];
-  const raw = match[1].trim();
-  if (raw.startsWith('[') && raw.endsWith(']')) {
-    const items = [];
-    const itemRegex = /"([^"]+)"|'([^']+)'/g;
-    let m;
-    while ((m = itemRegex.exec(raw)) !== null) {
-      const val = (m[1] || m[2] || '').trim();
-      if (val) items.push(val);
-    }
-    return items.length > 0 ? items : ['gpt-6.1-sol'];
-  }
-  const str = raw.replace(/^["']|["']$/g, '').trim();
-  return str ? [str] : ['gpt-6.1-sol'];
-}
-
-function readCodexConfigModels(options, deps) {
-  const o = options || {};
-  const d = deps || {};
-  const fsApi = d.fs || o.fs || fs;
-  const { configFile } = getCodexPaths(o, d);
-  try {
-    if (fsApi.existsSync(configFile)) {
-      const content = fsApi.readFileSync(configFile, 'utf8');
-      // strict: only ids the operator's config.toml actually names, no default.
-      if (o.strict && !/(?:^|\r?\n)\s*model\s*=/.test(String(content))) return [];
-      return parseCodexModelsFromToml(content);
-    }
-  } catch {}
-  return o.strict ? [] : ['gpt-6.1-sol'];
 }
 
 function selectReasoningCandidate(options, deps) {
@@ -1930,7 +1880,6 @@ module.exports = {
   getHermesHomeDir,
   sessionFilePath,
   configFilePath,
-  legacyConfigFilePath,
   skillFilePath,
   generateSessionId,
   loadSession,
@@ -1951,12 +1900,8 @@ module.exports = {
   HERMES_MIN_CONTEXT,
   getCodexPaths,
   hasCodexAuth,
-  parseCodexModelsFromToml,
-  readCodexConfigModels,
   fileExists,
   dirExists,
-  getFsCheckReasons,
-  clearFsCheckReasons,
   createFsCheckTracker,
   canonicalHermesModelId,
   PROVIDER_LEVEL_FAILURE_CAUSES,

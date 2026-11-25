@@ -562,89 +562,10 @@ function candidateStatus(data, candidate) {
   return last.status || 'unknown';
 }
 
-/** Record an alias mapping using seven-part identity dimensions. */
-function recordAlias(dir, upstreamOrCandidate, canonical, harness, alias, verified, note, extra) {
-  const data = loadEvidence(dir);
-  let record;
-  if (typeof upstreamOrCandidate === 'object' && upstreamOrCandidate !== null) {
-    const c = upstreamOrCandidate;
-    record = {
-      harness: c.harness,
-      accessPath: c.accessPath || '',
-      gateway: c.gateway || '',
-      upstream: c.upstream,
-      accountId: c.accountId || '*',
-      quotaScope: c.quotaScope || '',
-      canonical,
-      alias,
-      verified: Boolean(verified),
-      note: note || null,
-    };
-  } else {
-    const opts = (typeof extra === 'object' && extra) || {};
-    record = {
-      harness,
-      accessPath: opts.accessPath || '',
-      gateway: opts.gateway || '',
-      upstream: upstreamOrCandidate,
-      accountId: opts.accountId || '*',
-      quotaScope: opts.quotaScope || '',
-      canonical,
-      alias,
-      verified: Boolean(verified),
-      note: note || null,
-    };
-  }
-  const existing = data.aliases.find(
-    (a) =>
-      a.harness === record.harness &&
-      (a.accessPath || '') === record.accessPath &&
-      (a.gateway || '') === record.gateway &&
-      a.upstream === record.upstream &&
-      (a.accountId || '*') === record.accountId &&
-      (a.quotaScope || '') === record.quotaScope &&
-      a.canonical === record.canonical &&
-      a.alias === record.alias
-  );
-  if (existing) {
-    existing.verified = Boolean(verified);
-    if (note) existing.note = note;
-  } else {
-    data.aliases.push(record);
-  }
-  saveEvidence(dir, data);
-}
-
 function normQuotaPath(p) {
   if (!p) return '';
   if (typeof p === 'object') return candidateKey(p);
   return String(p);
-}
-
-/** Record shared-quota relationship. Defaults to unknown until verified. */
-function recordSharedQuota(dir, pathA, pathB, status, verified, reason) {
-  const data = loadEvidence(dir);
-  const kA = normQuotaPath(pathA);
-  const kB = normQuotaPath(pathB);
-  const existing = data.sharedQuotas.find(
-    (sq) =>
-      (normQuotaPath(sq.pathA) === kA && normQuotaPath(sq.pathB) === kB) ||
-      (normQuotaPath(sq.pathA) === kB && normQuotaPath(sq.pathB) === kA)
-  );
-  if (existing) {
-    existing.status = status;
-    existing.verified = Boolean(verified);
-    existing.reason = reason;
-  } else {
-    data.sharedQuotas.push({
-      pathA: kA,
-      pathB: kB,
-      status: status || 'unknown',
-      verified: Boolean(verified),
-      reason: reason || null,
-    });
-  }
-  saveEvidence(dir, data);
 }
 
 /** Shared-quota status between two paths/candidates. Default: unknown. */
@@ -683,7 +604,5 @@ module.exports = {
   isCandidateBlocked,
   isUpstreamBlocked,
   candidateStatus,
-  recordAlias,
-  recordSharedQuota,
   sharedQuotaStatus,
 };
