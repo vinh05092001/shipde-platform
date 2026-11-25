@@ -16,7 +16,13 @@
 
 ## Business outcome
 
-Wire agy-pool writer identityProof, F2 writer-scope commit check bound to worker-core.ps1 receipt, and job-root-only safe.directory. All agy-pool runtime flags stay OFF by default until the full Wave 3 stack lands on `main` and Stage 2 live proof is authorized.
+Wire agy-pool writer identityProof, F2 writer-scope commit check bound to worker-core.ps1 receipt (`promptEndedAt`, `cwd`, `headSha`), and job-root-only safe.directory. All agy-pool runtime flags stay OFF by default until the full Wave 3 stack lands on `main` and Stage 2 live proof is authorized.
+
+### Evidence contract
+
+- Absent or stale group evidence (`AGY_QUOTA_TIMING_MISSING`, `AGY_QUOTA_SNAPSHOT_STALE`, or unobserved delta) does **not** confirm group or model identity (`groupVerified: false`, `modelVerified: false`).
+- A writer run may continue without confirmed group evidence **only** when there is no contradicting evidence (no receipt/account/job/served-model mismatch and no foreign quota-group drain) **and** the F2 receipt-bound writer-scope diff check (`verifyAgyWriterCommit`) passes.
+- A reviewer run on `agy-pool` always requires `modelVerified === true` (group evidence alone is refused with `REVIEWER_SERVED_MODEL_UNVERIFIED`).
 
 ## Scope and acceptance
 
@@ -24,6 +30,7 @@ Wire agy-pool writer identityProof, F2 writer-scope commit check bound to worker
 | --- | --- | --- |
 | AC1 | Focused Wave 3 tests and existing JEV/criteria tests pass with zero regression | `tools/ai-brain/test/wi-c1-agy-writer-proof.test.js`; `tools/ai-brain/test/wi-c1-agy-writer-scope.test.js`; `tools/ai-brain/test/wi-c1-agy-writer-scope-orchestrate.test.js`; `tools/ai-brain/test/task-ai-142-agy-pool-producer.test.js`; `tools/ai-brain/test/task-ai-142-agy-writer-session.test.js` |
 | AC2 | Default configuration keeps agy-pool opt-in flags OFF and leaves 9router-only dispatch unchanged | `tools/ai-brain/test/wi-c1-agy-writer-proof.test.js`; `tools/ai-brain/test/wi-c1-agy-writer-scope.test.js`; `tools/ai-brain/test/wi-c1-agy-writer-scope-orchestrate.test.js`; `tools/ai-brain/test/task-ai-142-agy-pool-producer.test.js`; `tools/ai-brain/test/task-ai-142-agy-writer-session.test.js` |
+| AC3 | `worker-core.ps1` records `promptEndedAt` strictly before the `/quota` probe; absent/stale group evidence never confirms group/model identity, writers continue only with no contradiction and F2 PASS, and reviewers require `modelVerified === true` | `tools/ai-brain/test/task-ai-142-agy-pool-producer.test.js`; `tools/ai-brain/test/wi-c1-agy-writer-proof.test.js` |
 
 ## Verification
 
