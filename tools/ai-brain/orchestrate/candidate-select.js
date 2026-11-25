@@ -9,10 +9,16 @@ const { candidateKey } = require('../candidates');
 const { parseCandidateKey } = require('../discovery/identity');
 const comboReader = require('../combo-reader');
 const comboJev = require('../combo-jev-select');
+const agyPoolCandidates = require('../agy-pool-candidates');
 const decisions = require('../decisions');
 const sourcesApi = require('../sources');
 const jev = require('../jev');
-const { exhaustedAccountKey, roleOf, routingRoleOf } = require('./shared');
+const {
+  exhaustedAccountKey,
+  parseExhaustedAccountKey,
+  roleOf,
+  routingRoleOf,
+} = require('./shared');
 const { resolveLaunchRoute, routeProbeCandidate } = require('./route-probe');
 const { resolveLauncher, resolveIsolatedWorkerRoot, unique } = require('./writer-loop');
 const { normalizeAccount, explicitQualityFloor } = require('./checkpoint');
@@ -321,6 +327,30 @@ function shouldUseComboJevSelect(pool, o, comboApi) {
   );
 }
 
+/**
+ * Agy-pool failures for this item earlier in this run. failedKeys lives on the
+ * item for one run, so this never reads failures from another run. Only an
+ * account-exhausted mark excludes a whole account; a failed candidate key
+ * excludes just its model on its account.
+ */
+function failedAgyExclusions(failedSet) {
+  const accounts = new Set();
+  const modelAccounts = new Set();
+  for (const key of failedSet) {
+    if (typeof key !== 'string') continue;
+    const exhausted = parseExhaustedAccountKey(key);
+    if (exhausted && exhausted.harness === 'agy-pool') {
+      accounts.add(exhausted.accountId);
+      continue;
+    }
+    const parsed = parseCandidateKey(key);
+    if (parsed && parsed.harness === 'agy-pool' && parsed.account && parsed.modelId) {
+      modelAccounts.add(agyPoolCandidates.modelAccountKey(parsed.modelId, parsed.account));
+    }
+  }
+  return { accounts: Array.from(accounts), modelAccounts: Array.from(modelAccounts) };
+}
+
 async function selectCandidateForProfile(
   item,
   annotatedCandidates,
@@ -501,6 +531,7 @@ async function selectCandidateForProfile(
       });
     jevEligibleCount = eligibleMembers.length;
 
+    const agyExclusions = failedAgyExclusions(failedSet);
     let sel = null;
     if (eligibleMembers.length > 0) {
       sel = await comboJev.selectComboMember({
@@ -517,6 +548,9 @@ async function selectCandidateForProfile(
         minConfidence: o.jevMinConfidence,
         maxOptions: o.jevMaxOptions,
         comboName: o.comboName,
+        agyPoolOptions: o.agyPoolOptions,
+        excludedAccounts: agyExclusions.accounts,
+        excludedModelAccounts: agyExclusions.modelAccounts,
       });
       jevSelReason = (sel && (sel.reason || sel.error)) || null;
     }

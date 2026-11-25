@@ -113,6 +113,11 @@ function readAccountQuotaGroups(accountId, options = {}) {
   }
 }
 
+/** The key for one model on one agy account, as used by excludedModelAccounts. */
+function modelAccountKey(bareModel, accountId) {
+  return String(bareModel) + '@' + String(accountId);
+}
+
 /**
  * Discover eligible AGY pool models deduplicated by model ID.
  * Fails closed (returns []) when `agyPool` config is absent or invalid.
@@ -127,9 +132,16 @@ function discoverAgyPoolMembers(options = {}) {
       ? Object.keys(options.quotaSnapshots).sort()
       : agyPoolRuntime.discoverAccounts(options);
 
+  // Failures earlier in this run: an exhausted account is skipped for every
+  // model, and a failed model on one account is skipped for that pair only. A
+  // model then falls back to its next eligible account, and drops out of the
+  // shortlist when none is left.
+  const excluded = new Set(Array.from(options.excludedAccounts || []));
+  const excludedPairs = new Set(Array.from(options.excludedModelAccounts || []));
   const byModel = new Map();
 
   for (const accountId of accountIds) {
+    if (excluded.has(accountId)) continue;
     const groups = readAccountQuotaGroups(accountId, options);
     if (!Array.isArray(groups)) continue;
     for (const group of groups) {
@@ -141,6 +153,7 @@ function discoverAgyPoolMembers(options = {}) {
       const status = remaining >= cfg.openHeadroom ? 'open' : 'tight';
       const models = modelsFromGroup(group);
       for (const bareModel of models) {
+        if (excludedPairs.has(modelAccountKey(bareModel, accountId))) continue;
         const modelId = `agy-pool/${bareModel}`;
         if (!byModel.has(modelId)) {
           byModel.set(modelId, {
@@ -391,6 +404,7 @@ module.exports = {
   bucketKeyFromGroup,
   modelsFromGroup,
   discoverAgyPoolMembers,
+  modelAccountKey,
   buildAgyMemberCandidate,
   readAccountQuotaSnapshot,
   verifyAgyServedIdentity,

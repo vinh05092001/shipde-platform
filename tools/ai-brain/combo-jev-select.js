@@ -390,6 +390,8 @@ async function selectComboMember(options = {}) {
   if (includeAgyPool) {
     const agyOpts = Object.assign({}, options.agyPoolOptions || {}, {
       registry: (options.agyPoolOptions && options.agyPoolOptions.registry) || options.registry,
+      excludedAccounts: options.excludedAccounts || [],
+      excludedModelAccounts: options.excludedModelAccounts || [],
     });
     const agyMembers = agyPoolCandidates.discoverAgyPoolMembers(agyOpts);
     for (const am of agyMembers) {
