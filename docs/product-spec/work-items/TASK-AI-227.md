@@ -7,6 +7,8 @@
 | Work Item ID | TASK-AI-227 |
 | Feature ID | N/A |
 | Status | READY_FOR_AUTHOR |
+| Delivery order | 349 |
+| Allowed paths | `tools/ai-brain/resume-status.js`, `tools/ai-brain/validate-work-item.js`, `tools/ai-brain/hygiene-check.js`, `tools/ai-brain/test/task-ai-227-ai-os-pilot.test.js`, `docs/product-spec/work-items/TASK-AI-227.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Dependencies | TASK-AI-226, merged in #646 |
 | Base | 886cbe297ffa7ce5456d126309a4d26a53a1178f |
 | Assigned author | GEMINI (AGY 08) |
@@ -17,15 +19,6 @@
 ## Business outcome
 
 A fresh agent session can see what an existing run needs next, check whether a Work Item is ready to hand off, and identify what the run can safely clean up. Use the existing orchestration checkpoint for runtime facts and the delivery register for Work Item metadata.
-
-## Allowed paths
-
-- tools/ai-brain/resume-status.js
-- tools/ai-brain/validate-work-item.js
-- tools/ai-brain/hygiene-check.js
-- tools/ai-brain/test/task-ai-227-ai-os-pilot.test.js
-- docs/product-spec/work-items/TASK-AI-227.md
-- docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv
 
 ## Reuse and scope
 
