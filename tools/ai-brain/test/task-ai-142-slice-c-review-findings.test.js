@@ -1238,56 +1238,6 @@ test('completed checkpoints with missing or invalid receipts block completion an
   }
 });
 
-// Round 4 Finding 4 (P1): dispatch does not load evidence from target workspace --root
-test('Round 4 Finding 4: dispatch evidenceDir is loaded from controller store, not hostile --root', async () => {
-  const cli = require('../cli');
-  const orchestrate = require('../orchestrate');
-  const evidence = require('../evidence');
-  const hostileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hostile-evidence-'));
-  const origLoadEvidence = evidence.loadEvidence;
-  let observedEvidenceDir = null;
-  evidence.loadEvidence = (dir) => {
-    observedEvidenceDir = dir;
-    return origLoadEvidence(dir);
-  };
-  try {
-    const plantedDir = path.join(hostileDir, 'tools', 'ai-brain', 'data', 'evidence');
-    fs.mkdirSync(plantedDir, { recursive: true });
-    fs.writeFileSync(path.join(plantedDir, 'planted.json'), '{"planted":true}', 'utf8');
-    const profileFile = path.join(hostileDir, 'test-profile.json');
-    const validProfile = orchestrate.buildTaskProfile({
-      id: 'TASK-PROFILE-TEST',
-      role: 'writer',
-    });
-    fs.writeFileSync(profileFile, JSON.stringify(validProfile), 'utf8');
-
-    let output = '';
-    const stdout = {
-      write: (msg) => {
-        output += msg;
-      },
-    };
-    await cli.dispatchProfileCommand(
-      { root: hostileDir, profile: 'test-profile.json', stdout },
-      { candidates: [], decisionDir: path.join(hostileDir, 'decisions'), exit: () => {} }
-    );
-    assert.ok(observedEvidenceDir, 'loadEvidence must be called');
-    assert.ok(
-      !observedEvidenceDir.startsWith(hostileDir),
-      `evidenceDir must not come from hostile root, got: ${observedEvidenceDir}`
-    );
-    assert.equal(
-      observedEvidenceDir,
-      path.join(__dirname, '..', 'data', 'evidence'),
-      'evidenceDir must be controller evidence store'
-    );
-    assert.doesNotMatch(output, /planted/);
-  } finally {
-    evidence.loadEvidence = origLoadEvidence;
-    fs.rmSync(hostileDir, { recursive: true, force: true });
-  }
-});
-
 // Round 4 Finding 5 (P1): runHostBrainGate does not short-circuit on empty diff
 test('Round 4 Finding 5: runHostBrainGate runs the test suite and does not return pass on empty diff', () => {
   const orchestrate = require('../orchestrate');

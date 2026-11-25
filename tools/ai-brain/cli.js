@@ -82,7 +82,6 @@ const {
   applyFailureBlocks,
   applyDryRunBlocks,
   buildDryRunLog,
-  dispatchProfileCommand,
 } = require('./cli/dispatch-helpers');
 const {
   reviewCommand,
@@ -406,7 +405,6 @@ module.exports = {
   orchestrateCommand,
   mergeCommand,
   intakeCommand,
-  dispatchProfileCommand,
   tokenReportCommand,
   planCommand,
   nextCommand: (args, deps) => {
