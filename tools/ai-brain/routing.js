@@ -1028,15 +1028,11 @@ function qualityScoreOf(candidate, now) {
  *
  * Units:
  * - Explicit candidate quality: 'points' (0-100).
- * - Validated measurement (active policy): 'fraction_scaled_100' (0-100, derived from f in [0, 1] * 100).
  * - Valid external prior: 'points' (0-100).
  *
  * Source order (admission contract):
  * 1. Explicit candidate.quality (valid finite number in [0, 100], no boolean/empty string coercion).
- * 2. Validated measurement via scoreMeasurements(candidate, assessment, ctx).breakdown.quality * 100
- *    when scoring policy is active. Invalid, null, stale, wrong-unit, or wrong-model/version
- *    measurements yield unknown (never coerced to 0).
- * 3. Valid external prior via priorFor(candidate, role, priors, now). Missing, unknown, or
+ * 2. Valid external prior via priorFor(candidate, role, priors, now). Missing, unknown, or
  *    stale priors yield unknown (never fallback to numeric 0).
  *
  * Proof evidence (API_PASS, HARNESS_PASS, WORK_ITEM_PASS) is proof of execution, not floor evidence.
@@ -1067,27 +1063,7 @@ function resolveFloorQuality(candidate, assessment, ctx) {
     }
   }
 
-  // 2. Validated measurement via scoreMeasurements breakdown under active scoring policy
-  if (assessment && assessment.scoringPolicy) {
-    const scored = scoreMeasurements(candidate, assessment, ctx);
-    const fraction = scored && scored.breakdown ? scored.breakdown.quality : null;
-    if (fraction !== null && fraction !== undefined && Number.isFinite(fraction)) {
-      const val = Math.max(0, Math.min(100, fraction * 100));
-      const source =
-        (scored.breakdown.measurements &&
-          scored.breakdown.measurements.quality &&
-          scored.breakdown.measurements.quality.source) ||
-        'measurement';
-      return {
-        known: true,
-        value: val,
-        units: 'fraction_scaled_100',
-        source,
-      };
-    }
-  }
-
-  // 3. Valid external prior via priorFor
+  // 2. Valid external prior via priorFor
   const now = (ctx && ctx.now) || Date.now();
   const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
   if (
@@ -1162,92 +1138,7 @@ function legacyParts(parts) {
   };
 }
 
-function scoreMeasurements(candidate, assessment, ctx) {
-  const policy = assessment && assessment.scoringPolicy;
-  const now = ctx?.now ?? Date.now();
-  const parts = Object.assign(Object.create(null), { quality: null });
-  const measurements = {};
-  let provenance = null;
-  let total = 0;
-  let weight = 0;
-  // No inferred benchmark aliases, proof-tier scores, default weights or penalties.
-  // Linear normalization uses the policy's declared unit and bounds, never a
-  // mixture of raw benchmark points and a different scorer's numeric scale.
-  if (
-    policy?.version &&
-    policy.source &&
-    policy.rationale &&
-    Number.isFinite(policy.maxAgeMs) &&
-    policy.maxAgeMs > 0
-  ) {
-    provenance = {
-      version: policy.version,
-      source: policy.source,
-      rationale: policy.rationale,
-      maxAgeMs: policy.maxAgeMs,
-    };
-    for (const [dimension, rule] of Object.entries(policy.dimensions || {})) {
-      const measured = candidate.measurements?.[dimension];
-      const at = Date.parse(measured?.observedAt);
-      const valid =
-        rule &&
-        Number.isFinite(rule.weight) &&
-        rule.weight > 0 &&
-        Number.isFinite(rule.min) &&
-        Number.isFinite(rule.max) &&
-        rule.max > rule.min &&
-        rule.unit &&
-        (rule.direction === 'higher' || rule.direction === 'lower') &&
-        measured &&
-        Number.isFinite(measured.value) &&
-        measured.source &&
-        Number.isInteger(measured.samples) &&
-        measured.samples > 0 &&
-        Number.isFinite(at) &&
-        at <= now &&
-        now - at <= policy.maxAgeMs &&
-        measured.unit === rule.unit &&
-        measured.value >= rule.min &&
-        measured.value <= rule.max &&
-        candidate.modelId &&
-        candidate.modelVersion &&
-        measured.modelId === candidate.modelId &&
-        measured.modelVersion === candidate.modelVersion;
-      if (!valid) {
-        parts[dimension] = null;
-        continue;
-      }
-      const fraction = (measured.value - rule.min) / (rule.max - rule.min);
-      const part = rule.direction === 'higher' ? fraction : 1 - fraction;
-      parts[dimension] = part;
-      measurements[dimension] = {
-        value: measured.value,
-        unit: measured.unit,
-        source: measured.source,
-        samples: measured.samples,
-        observedAt: measured.observedAt,
-        modelId: measured.modelId,
-        modelVersion: measured.modelVersion,
-        rule: {
-          weight: rule.weight,
-          min: rule.min,
-          max: rule.max,
-          unit: rule.unit,
-          direction: rule.direction,
-        },
-      };
-      total += part * rule.weight;
-      weight += rule.weight;
-    }
-  }
-  const breakdown = { ...parts, measurements, policy: provenance };
-  if (breakdown.quality === null) breakdown.qualityLabel = 'QUALITY_UNKNOWN';
-  const score = weight > 0 ? total / weight : null;
-  return { score: Number.isFinite(score) ? score : null, breakdown, reservationsHeld: 0 };
-}
-
 function scoreForProfile(candidate, assessment, ctx) {
-  if (assessment?.scoringPolicy) return scoreMeasurements(candidate, assessment, ctx);
   // Preserve the historical dispatch contract when no profile snapshot exists.
   if (!assessment?.weights && !ctx?.profile) {
     const legacy = ranking.scoreCandidate(
@@ -1781,18 +1672,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       return c.score - (Number(priorContribution) || 0) === 0;
     });
   const top3 = ranked.slice(0, 3);
-  const deterministicChosen =
-    top3.length && (!assessment.scoringPolicy || Number.isFinite(top3[0].score))
-      ? top3[0].candidateKey
-      : null;
+  const deterministicChosen = top3.length ? top3[0].candidateKey : null;
   const chosen = deterministicChosen;
-  const reasonCode = assessment.scoringPolicy
-    ? ranked.length && ranked.every((c) => !Number.isFinite(c.score))
-      ? 'SCORING_INPUTS_UNVERIFIED'
-      : null
-    : allZero
-      ? 'MODEL_SELECTION_NOT_PROVEN'
-      : null;
+  const reasonCode = allZero ? 'MODEL_SELECTION_NOT_PROVEN' : null;
   const topScore =
     top3.length > 0 &&
     ((top3[0].scoreBreakdown &&
@@ -1806,7 +1688,6 @@ function rankForProfile(candidates, profile, assessment, ctx) {
         ? top3[0].score
         : null;
   const weightsLabel =
-    assessment.scoringPolicy?.version ||
     assessment.weightProfile ||
     assessment.weightSource ||
     (assessment.weights ? JSON.stringify(assessment.weights) : 'default');
@@ -1829,11 +1710,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     ranking: ranked,
     needsCapabilityProbe,
     rejected,
-    refused: chosen
-      ? null
-      : reasonCode === 'SCORING_INPUTS_UNVERIFIED'
-        ? reasonCode
-        : 'NO_CANDIDATE_MEETS_PROFILE',
+    refused: chosen ? null : 'NO_CANDIDATE_MEETS_PROFILE',
     reasonCode,
     reason,
     modelChoice: {
