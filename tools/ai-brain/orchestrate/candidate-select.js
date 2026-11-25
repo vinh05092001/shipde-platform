@@ -13,7 +13,12 @@ const agyPoolCandidates = require('../agy-pool-candidates');
 const decisions = require('../decisions');
 const sourcesApi = require('../sources');
 const jev = require('../jev');
-const { exhaustedAccountKey, roleOf, routingRoleOf } = require('./shared');
+const {
+  exhaustedAccountKey,
+  parseExhaustedAccountKey,
+  roleOf,
+  routingRoleOf,
+} = require('./shared');
 const { resolveLaunchRoute, routeProbeCandidate } = require('./route-probe');
 const { resolveLauncher, resolveIsolatedWorkerRoot, unique } = require('./writer-loop');
 const { normalizeAccount, explicitQualityFloor } = require('./checkpoint');
@@ -333,9 +338,9 @@ function failedAgyExclusions(failedSet) {
   const modelAccounts = new Set();
   for (const key of failedSet) {
     if (typeof key !== 'string') continue;
-    const mark = /^account-exhausted::agy-pool::(.+)$/.exec(key);
-    if (mark) {
-      accounts.add(mark[1]);
+    const exhausted = parseExhaustedAccountKey(key);
+    if (exhausted && exhausted.harness === 'agy-pool') {
+      accounts.add(exhausted.accountId);
       continue;
     }
     const parsed = parseCandidateKey(key);

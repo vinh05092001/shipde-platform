@@ -8,6 +8,13 @@ function exhaustedAccountKey(c) {
   return `account-exhausted::${c.harness || ''}::${c.accountId}`;
 }
 
+function parseExhaustedAccountKey(key) {
+  if (typeof key !== 'string') return null;
+  const match = /^account-exhausted::([^:]*)::(.+)$/.exec(key);
+  if (!match) return null;
+  return { harness: match[1], accountId: match[2] };
+}
+
 const ItemStatus = Object.freeze({
   COMPLETED: 'completed',
   BLOCKED: 'blocked',
@@ -58,6 +65,7 @@ function routingRoleOf(item) {
 
 module.exports = {
   exhaustedAccountKey,
+  parseExhaustedAccountKey,
   ItemStatus,
   RunStatus,
   PublicationStatus,

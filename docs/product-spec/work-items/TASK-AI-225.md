@@ -10,7 +10,7 @@
 | Dependencies | `TASK-AI-224` |
 | Assigned author | Wave 3 agy-pool team (AGY 08 + Claude + Codex); packaged by Antigravity (`agy08`, Gemini) |
 | Risk | `LOW`: opt-in agy-pool lane remains OFF by default; in-run exclusion only |
-| Allowed paths | `tools/ai-brain/agy-pool-candidates.js`; `tools/ai-brain/combo-jev-select.js`; `tools/ai-brain/orchestrate/candidate-select.js`; `tools/ai-brain/test/wi-d-agy-account-rotation.test.js`; `docs/product-spec/work-items/TASK-AI-225.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths | `tools/ai-brain/agy-pool-candidates.js`; `tools/ai-brain/combo-jev-select.js`; `tools/ai-brain/orchestrate/candidate-select.js`; `tools/ai-brain/orchestrate/shared.js`; `tools/ai-brain/test/wi-d-agy-account-rotation.test.js`; `docs/product-spec/work-items/TASK-AI-225.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | Independent reviewer on a different model |
 | Branch | `feat/task-ai-225-agy-account-rotation` |
 
