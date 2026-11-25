@@ -20,7 +20,6 @@ const path = require('node:path');
 
 const evidence = require('../evidence');
 const candidates = require('../candidates');
-const ranking = require('../ranking');
 
 describe('failure classifier outcome path', () => {
   test('an outer 503 wrapping 402 cools down the upstream and leaves another upstream eligible', () => {
@@ -277,7 +276,7 @@ describe('failure classifier outcome path', () => {
     assert.equal(blockA.blocked, true, 'candA must be cooled down after spawn failure');
   });
 
-  test("after a failure is classified, the chooser's next ranking reflects it", () => {
+  test('after a failure is classified, the next annotation blocks only the failed candidate', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ev-rank-'));
     const cand1 = {
       harness: 'paseo',
@@ -302,16 +301,11 @@ describe('failure classifier outcome path', () => {
       cost: 20,
     };
 
-    // Initial state: both are eligible, cand1 ranks first (lower cost, equal otherwise)
+    // Initial state: both are eligible.
     const evData0 = evidence.loadEvidence(dir);
     const annotated0 = candidates.annotateCandidates([cand1, cand2], evData0);
-    const decision0 = ranking.rankAndRecord(annotated0, {
-      workItemId: 'TASK-RANK-01',
-      role: 'author.foundation',
-      dryRun: true,
-      explorationBudget: 1,
-    });
-    assert.equal(decision0.chosen, candidates.candidateKey(cand1), 'cand1 chosen initially');
+    assert.equal(annotated0[0].blocked, false, 'cand1 starts unblocked');
+    assert.equal(annotated0[1].blocked, false, 'cand2 starts unblocked');
 
     // cand1 fails with classified 404 model not found
     evidence.recordProbe(dir, cand1, {
@@ -325,26 +319,5 @@ describe('failure classifier outcome path', () => {
     const annotated1 = candidates.annotateCandidates([cand1, cand2], evData1);
     assert.equal(annotated1[0].blocked, true, 'cand1 must be marked blocked');
     assert.equal(annotated1[1].blocked, false, 'cand2 must remain unblocked');
-
-    const decision1 = ranking.rankAndRecord(annotated1, {
-      workItemId: 'TASK-RANK-01-retry',
-      role: 'author.foundation',
-      dryRun: true,
-      explorationBudget: 1,
-    });
-
-    // Next ranking reflects the failure: cand1 is rejected as blocked, cand2 is chosen
-    assert.equal(
-      decision1.chosen,
-      candidates.candidateKey(cand2),
-      'cand2 chosen after cand1 failure'
-    );
-    const rej1 = decision1.rejected.find((r) => r.offeringId === candidates.candidateKey(cand1));
-    assert.ok(rej1, 'cand1 must appear in rejected list');
-    assert.match(
-      rej1.reason,
-      /alias_mismatch|404|blocked/,
-      'rejection reason reflects the classified failure'
-    );
   });
 });

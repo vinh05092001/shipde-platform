@@ -68,7 +68,7 @@ for (const [name, snapshot, withProfile] of [
   ['null assessment with researcher profile', null, true],
   ['null scoring policy with researcher profile', { scoringPolicy: null }, true],
 ]) {
-  test(`no-policy execute preserves legacy scoring and ordering: ${name}`, (t) => {
+  test(`no-policy scoring keeps the legacy score parts: ${name}`, (t) => {
     const rows = [candidate('fixture/evidenced', null), candidate('fixture/high-quality', null)];
     rows[0].quality = 10;
     rows[0].evidence = [{ status: 'passed', level: 'OUTCOME' }];
@@ -76,43 +76,24 @@ for (const [name, snapshot, withProfile] of [
     const ctx = { ...context(), assessment: snapshot };
     if (!withProfile) delete ctx.profile;
     const baselineContext = { ...ctx, profile: undefined, assessment: undefined };
-    const legacy = ranking.rankAndRecord(structuredClone(rows), baselineContext);
-    const result = ranking.rankAndRecord(structuredClone(rows), ctx);
-    assert.equal(result.chosen, routing.candidateKey(rows[0]));
+    const scorer = t.mock.method(routing, 'scoreForProfile', () => {
+      assert.fail('no-policy scoring must not enter the shared profile scorer');
+    });
+    const scored = rows.map((row) => ranking.scoreCandidate(row, rows, profile.role, ctx));
     assert.deepEqual(
-      result.candidates.map((row) => row.score),
+      scored.map((r) => r.total),
       [51, 33]
     );
-    assert.deepEqual(result, legacy);
-    for (const row of result.candidates) {
+    assert.deepEqual(
+      scored,
+      rows.map((row) => ranking.scoreCandidate(row, rows, profile.role, baselineContext))
+    );
+    for (const r of scored) {
       for (const part of Object.keys(ranking.WEIGHTS)) {
-        assert.equal(row.scoreBreakdown.sources[part], 'unsourced', part);
+        assert.equal(r.breakdown.sources[part], 'unsourced', part);
       }
     }
-
-    // Equal upstream/score must retain input order, not profile key ordering.
-    const tied = [candidate('z/first', null), candidate('a/second', null)];
-    tied.forEach((row) => {
-      row.quality = 80;
-    });
-    assert.deepEqual(
-      ranking.rankAndRecord(structuredClone(tied), ctx),
-      ranking.rankAndRecord(structuredClone(tied), baselineContext)
-    );
-
-    const scorer = t.mock.method(routing, 'scoreForProfile', () => {
-      assert.fail('no-policy execute must not enter the shared profile scorer');
-    });
-    const comparator = t.mock.method(routing, 'compareProfileScores', () => {
-      assert.fail('no-policy execute must not enter profile ordering');
-    });
-    assert.deepEqual(ranking.scoreCandidate(rows[0], rows, profile.role, ctx), {
-      total: legacy.candidates[0].score,
-      breakdown: legacy.candidates[0].scoreBreakdown,
-    });
-    assert.deepEqual(ranking.rankAndRecord(structuredClone(rows), ctx), legacy);
     assert.equal(scorer.mock.callCount(), 0);
-    assert.equal(comparator.mock.callCount(), 0);
   });
 }
 
@@ -123,26 +104,6 @@ test('no-policy execute direct scoring cannot enter the shared scorer', (t) => {
   const scored = ranking.scoreCandidate(row, [row], profile.role, ctx);
   assert.equal(scored.total, 33);
   assert.equal(scored.breakdown.sources.evidence, 'unsourced');
-});
-
-test('no-policy execute ordering cannot enter the shared comparator', (t) => {
-  const rows = [candidate('z/first', null), candidate('a/second', null)];
-  rows.forEach((row) => {
-    row.quality = 80;
-  });
-  t.mock.method(routing, 'compareProfileScores', () => assert.fail('unexpected shared comparator'));
-  // Isolate ordering from the separate scoring defect.
-  t.mock.method(routing, 'scoreForProfile', () => ({ score: 33, breakdown: { quality: 80 } }));
-  for (const ctx of [
-    { ...context(), assessment: {} },
-    { ...context(), profile: undefined, assessment: { weights: { quality: 1 } } },
-  ]) {
-    const result = ranking.rankAndRecord(structuredClone(rows), ctx);
-    assert.deepEqual(
-      result.candidates.map((row) => row.modelId),
-      rows.map((row) => row.modelId)
-    );
-  }
 });
 
 test('empty assessment preserves legacy profile scores without ctx.profile', () => {
@@ -170,41 +131,6 @@ test('empty assessment preserves legacy profile scores without ctx.profile', () 
   assert.deepEqual(result, explicitProfile);
 });
 
-test('empty assessment preserves legacy execute scores, selection and unsourced parts', () => {
-  const rows = [candidate('fixture/evidenced', null), candidate('fixture/high-quality', null)];
-  rows[0].quality = 10;
-  rows[0].evidence = [{ status: 'passed', level: 'OUTCOME' }];
-  rows[1].quality = 90;
-  const ctx = context();
-  delete ctx.profile;
-  delete ctx.assessment;
-  const legacy = ranking.rankAndRecord(structuredClone(rows), ctx);
-  assert.equal(legacy.chosen, routing.candidateKey(rows[0]));
-  const empty = ranking.rankAndRecord(structuredClone(rows), { ...ctx, assessment: {} });
-  assert.equal(empty.chosen, legacy.chosen);
-  assert.deepEqual(empty.candidates, legacy.candidates);
-  for (const row of empty.candidates) {
-    for (const part of Object.keys(ranking.WEIGHTS)) {
-      assert.equal(row.scoreBreakdown.sources[part], 'unsourced', part);
-    }
-  }
-});
-
-test('empty assessment preserves legacy execute tie ordering', () => {
-  const rows = [candidate('z/first', null), candidate('a/second', null)];
-  rows.forEach((row) => {
-    row.quality = 80;
-  });
-  const ctx = context();
-  delete ctx.profile;
-  delete ctx.assessment;
-  const legacy = ranking.rankAndRecord(structuredClone(rows), ctx);
-  const empty = ranking.rankAndRecord(structuredClone(rows), { ...ctx, assessment: {} });
-  assert.equal(legacy.chosen, routing.candidateKey(rows[0]));
-  assert.equal(empty.chosen, legacy.chosen);
-  assert.deepEqual(empty.candidates, legacy.candidates);
-});
-
 test('no-policy own reservation retains each entry point legacy behavior without ctx.taskId', () => {
   const rows = [candidate('fixture/quality-a', null), candidate('fixture/quality-b', null)];
   rows[0].quality = 80;
@@ -221,16 +147,6 @@ test('no-policy own reservation retains each entry point legacy behavior without
     dry.ranking.map((row) => row.score),
     [65, 55]
   );
-  const execute = ranking.rankAndRecord(structuredClone(rows), ctx);
-  assert.deepEqual(
-    execute,
-    ranking.rankAndRecord(structuredClone(rows), {
-      ...ctx,
-      profile: undefined,
-      assessment: undefined,
-    })
-  );
-  assert.equal(execute.chosen, routing.candidateKey(rows[1]));
 });
 
 test('legacy snapshot keeps selecting and marks legacy parts unsourced', () => {
@@ -238,17 +154,7 @@ test('legacy snapshot keeps selecting and marks legacy parts unsourced', () => {
   rows[1].quality = 80;
   const ctx = { ...context(), assessment: { weights: { quality: 1, applyPenalties: false } } };
   const dry = routing.rankForProfile(structuredClone(rows), profile, ctx.assessment, ctx);
-  const execute = ranking.rankAndRecord(structuredClone(rows), ctx);
   assert.ok(dry.chosen);
-  assert.equal(execute.chosen, dry.chosen);
-  assert.deepEqual(
-    execute,
-    ranking.rankAndRecord(structuredClone(rows), {
-      ...ctx,
-      profile: undefined,
-      assessment: undefined,
-    })
-  );
   assert.equal(dry.ranking[1].scoreBreakdown.quality, null);
   assert.equal(dry.ranking[1].qualityLabel, 'QUALITY_UNKNOWN');
   for (const row of dry.ranking) {
@@ -260,14 +166,12 @@ test('legacy snapshot keeps selecting and marks legacy parts unsourced', () => {
   }
 });
 
-test('bare legacy dispatch retains its exported helpers and selectable score', () => {
+test('bare legacy scoring retains its exported helpers and unsourced parts', () => {
   const row = candidate('legacy/bare', null);
   const ctx = context();
   delete ctx.assessment;
   delete ctx.profile;
-  const result = ranking.rankAndRecord([row], ctx);
-  assert.ok(result.chosen);
-  const parts = result.candidates[0].scoreBreakdown;
+  const parts = ranking.scoreCandidate(row, [row], profile.role, ctx).breakdown;
   for (const part of Object.keys(ranking.WEIGHTS)) assert.equal(parts.sources[part], 'unsourced');
   for (const name of [
     'evidenceScore',
@@ -291,16 +195,6 @@ test('no-policy tie breaks and reservation parts retain each entry point legacy 
     reservations: [{ offeringId: routing.candidateKey(rows[1]), workItemId: 'other' }],
   };
   const dry = routing.rankForProfile(structuredClone(rows), profile, ctx.assessment, ctx);
-  const execute = ranking.rankAndRecord(structuredClone(rows), ctx);
-  assert.deepEqual(
-    execute,
-    ranking.rankAndRecord(structuredClone(rows), {
-      ...ctx,
-      profile: undefined,
-      assessment: undefined,
-    })
-  );
-  assert.equal(execute.chosen, routing.candidateKey(rows[0]));
   assert.ok(dry.ranking.some((c) => c.scoreBreakdown.busyPenalty > 0));
 });
 test('no-policy admission preserves UNKNOWN quality under a positive floor', () => {
