@@ -217,9 +217,22 @@ test('goal orchestration uses the authorized pool submission and keeps its durab
       path.join(dir, 'out.txt'),
       'The requested changes are ready for verification.'
     );
+    // Like worker-core.ps1: the receipt names the root the job ran in and the
+    // HEAD it left there (WI-C1 scope follow-up).
+    const head = cp.spawnSync('git', ['-c', 'safe.directory=*', 'rev-parse', 'HEAD'], {
+      cwd: submitted.cwd,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
     fs.writeFileSync(
       path.join(dir, 'result.json'),
-      JSON.stringify({ state: 'ok', exitCode: 0, jobId: submitted.jobId })
+      JSON.stringify({
+        state: 'ok',
+        exitCode: 0,
+        jobId: submitted.jobId,
+        cwd: submitted.cwd,
+        headSha: String(head.stdout || '').trim(),
+      })
     );
     freshResult(path.join(dir, 'result.json'));
     return { exitCode: 0 };

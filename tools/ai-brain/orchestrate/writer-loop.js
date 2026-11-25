@@ -76,11 +76,26 @@ function resolveLauncher(o, isolatedLauncher) {
         .map(Number)
         .filter((v) => Number.isFinite(v) && v >= 0);
       const poolTimeoutMs = bounds.length > 0 ? Math.min(...bounds) : undefined;
+      const agyCandidates = require('../agy-pool-candidates');
+      const readQuota =
+        typeof o.readAgyQuota === 'function'
+          ? o.readAgyQuota
+          : (accountId) => agyCandidates.readAccountQuotaSnapshot(accountId, o);
+      const quotaBefore = readQuota(job.accountId);
+      const runStartedAt = Date.now();
       const result = pool.submitJob(job.accountId, job, {
         ...o,
         timeoutMs: poolTimeoutMs,
       });
-      return {
+      const submitReturnedAt = Date.now();
+      const parsedPromptEndedAt =
+        result && typeof result.promptEndedAt === 'string' && result.promptEndedAt.trim()
+          ? Date.parse(result.promptEndedAt)
+          : Number.NaN;
+      const runEndedAt = Number.isFinite(parsedPromptEndedAt)
+        ? parsedPromptEndedAt
+        : submitReturnedAt;
+      const launched = {
         ...result,
         exitCode: result.state === 'ok' ? result.exitCode : result.exitCode || 1,
         stdout: result.jobId && result.state === 'ok' ? pool.readOutText(job.accountId, o) : '',
@@ -88,6 +103,73 @@ function resolveLauncher(o, isolatedLauncher) {
         refusal: result.state === 'error' ? result.reason : undefined,
         launchHandle: result.jobId || null,
       };
+      if (result.state !== 'ok') return launched;
+      // The job binding itself comes from agy-pool-runtime: waitForResult only
+      // returns a result whose jobId is the submitted one. The receipt checks
+      // below are a second guard on that, not a replacement for it.
+      // The pool reports no served model, so quota groups are the only run
+      // evidence. Evidence that contradicts the request refuses the run; a
+      // writer may continue on group evidence only after its commit passes the
+      // writer-scope diff check below (the pool bypasses the isolated launcher,
+      // so that check is not applied anywhere else), and a reviewer needs the
+      // served model itself to prove family independence.
+      const scope = String(job.quotaScope || '');
+      const identityProof = agyCandidates.verifyAgyServedIdentity({
+        requestedModel: job.model,
+        expectedBucket: scope.includes(':') ? scope.slice(scope.indexOf(':') + 1) : null,
+        quotaBefore,
+        quotaAfter: readQuota(job.accountId),
+        receipt: {
+          accountId: result.accountId,
+          jobId: result.jobId,
+          servedModel: result.servedModel,
+        },
+        accountId: job.accountId,
+        runStartedAt,
+        runEndedAt,
+      });
+      const contradicting = [
+        'AGY_RECEIPT_MISSING',
+        'AGY_ACCOUNT_MISMATCH',
+        'AGY_RUN_BINDING_MISMATCH',
+        'AGY_SERVED_MODEL_MISMATCH',
+        'AGY_GROUP_DELTA_MISMATCH',
+      ];
+      const refusal = contradicting.includes(identityProof.error)
+        ? 'AGY_IDENTITY_REFUSED: ' + identityProof.error
+        : job.isReview && identityProof.modelVerified !== true
+          ? 'REVIEWER_SERVED_MODEL_UNVERIFIED: ' +
+            (identityProof.error || identityProof.evidenceKind)
+          : null;
+      if (refusal) {
+        return { ...launched, exitCode: 1, stderr: refusal, refusal, identityProof };
+      }
+      if (!job.isReview && WRITER_ROLE.test(job.labels?.role || '')) {
+        const scoped = verifyAgyWriterCommit(job, result, o);
+        if (!scoped.ok) {
+          const reason =
+            scoped.code +
+            (scoped.offending && scoped.offending.length
+              ? ': ' + scoped.offending.map((f) => (f && f.path) || String(f)).join(', ')
+              : scoped.detail
+                ? ': ' + scoped.detail
+                : '');
+          const refused = {
+            ...launched,
+            exitCode: 1,
+            localFailure: scoped.code,
+            refusal: reason,
+            failureReason: reason,
+            stderr: [launched.stderr, reason].filter(Boolean).join('\n'),
+            identityProof,
+          };
+          delete refused.workerSha;
+          delete refused.retainedHeadSha;
+          return refused;
+        }
+        return { ...launched, identityProof, workerSha: scoped.headSha };
+      }
+      return { ...launched, identityProof };
     }
     let launchArgs;
     try {
@@ -141,7 +223,7 @@ function resolveLauncher(o, isolatedLauncher) {
       baseSha: job.baseSha,
       branch: job.branch,
       workItemId: job.title || (job.labels && job.labels.workItem) || null,
-      commitFileOnlyWriter: /^author(?:\.|$)|^(?:writer|repair)$/.test(job.labels?.role || ''),
+      commitFileOnlyWriter: WRITER_ROLE.test(job.labels?.role || ''),
       retainWorkerHead: job.retainWorkerHead || undefined,
       // TASK-AI-188: the dirty-root adoption check needs the run that owns the
       // retained root and the Work Item's allowed paths.
@@ -347,6 +429,78 @@ function runVerificationCommand(item, options) {
  * Hardened git per PR #184/#187/#189: never consults worker config, copies sanitized objects,
  * configures safe line endings and filemode, and verifies HEAD matches targetSha via hardened rev-parse.
  */
+
+// The roles whose commit is a writer commit; aligned with routing.js (/i) and used by both launchers.
+const WRITER_ROLE = /^author(?:\.|$)|^(?:writer|repair)$/i;
+
+/**
+ * Writer-scope check for an agy-pool writer, which runs outside the isolated
+ * launcher. The root and base come from the job the Controller bound to this
+ * run, and the head from that job's own receipt: the pool worker records the
+ * root it ran in and the HEAD it left there. The root's HEAD must still be that
+ * head, so a commit another job made on a shared root is never taken as this
+ * job's. A missing or mismatched value refuses, and nothing falls back to the
+ * Controller's own checkout or HEAD.
+ */
+function verifyAgyWriterCommit(job, receipt, options) {
+  const root = job.workerRoot || job.cwd || null;
+  if (!root || !fs.existsSync(path.join(root, '.git'))) {
+    return { ok: false, code: 'AGY_WRITER_ROOT_UNBOUND' };
+  }
+  const baseSha = typeof job.baseSha === 'string' && SHA_40.test(job.baseSha) ? job.baseSha : null;
+  if (!baseSha) return { ok: false, code: 'AGY_WRITER_BASE_UNBOUND' };
+  const ran = receipt && typeof receipt.cwd === 'string' && receipt.cwd ? receipt.cwd : null;
+  if (!ran) return { ok: false, code: 'AGY_WRITER_RECEIPT_ROOT_MISSING' };
+  const same = (a, b) => {
+    const norm = (p) => path.resolve(p).replace(/[\\/]+$/, '');
+    return process.platform === 'win32'
+      ? norm(a).toLowerCase() === norm(b).toLowerCase()
+      : norm(a) === norm(b);
+  };
+  if (!same(ran, root)) {
+    return { ok: false, code: 'AGY_WRITER_RECEIPT_ROOT_MISMATCH', detail: ran };
+  }
+  const headSha =
+    receipt && typeof receipt.headSha === 'string' && SHA_40.test(receipt.headSha)
+      ? receipt.headSha.toLowerCase()
+      : null;
+  if (!headSha) return { ok: false, code: 'AGY_WRITER_RECEIPT_HEAD_MISSING' };
+  const current = headShaOf(root, options);
+  if (!current) return { ok: false, code: 'AGY_WRITER_HEAD_UNREADABLE' };
+  if (current.toLowerCase() !== headSha) {
+    return { ok: false, code: 'AGY_WRITER_RECEIPT_HEAD_MISMATCH', detail: current };
+  }
+  if (headSha !== baseSha.toLowerCase()) {
+    const { runHardenedGit } = require('./hardened-git');
+    const anc = runHardenedGit(root, ['merge-base', '--is-ancestor', baseSha, headSha]);
+    if (anc.error || anc.status !== 0) {
+      return { ok: false, code: 'AGY_WRITER_HEAD_NOT_FROM_BASE', detail: headSha };
+    }
+  }
+  const diff = require('../writer-scope').checkWriterCommitDiff({
+    workerRoot: root,
+    baseSha,
+    headSha,
+    writerPaths: job.writerPaths,
+    allowedPaths: job.allowedPaths,
+  });
+  if (!diff.ok) return diff;
+  return { ok: true, headSha, root };
+}
+
+/**
+ * The worker sha of a launch that did not run in an isolated root. An agy-pool
+ * writer's commit is the one its scope check verified in the job's own root, never
+ * that root's later HEAD or the Controller's sha; other harnesses keep their rule.
+ */
+function nonIsolatedWorkerSha(job, res, controllerSha) {
+  if (job && job.harness === 'agy-pool') {
+    const sha = res && !res.localFailure && res.workerSha ? res.workerSha : null;
+    const unverified = !sha && Boolean(res && res.exitCode === 0 && !job.isReview);
+    return { sha, unverified };
+  }
+  return { sha: headShaOf(job && job.cwd) || controllerSha || null, unverified: false };
+}
 
 function headShaOf(cwd, options) {
   if (!cwd || !fs.existsSync(path.join(cwd, '.git'))) return null;
@@ -873,4 +1027,5 @@ module.exports = {
   progressOf,
   prepareUsageReport,
   unique,
+  nonIsolatedWorkerSha,
 };
