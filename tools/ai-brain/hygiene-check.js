@@ -121,11 +121,15 @@ function hasPositiveInactiveProof({ checkpoint, liveStep, review, wt }) {
   if (wt && (wt.active === true || wt.leaseActive === true)) {
     return { inactive: false, reason: 'RUN_ACTIVE' };
   }
-  if (TERMINAL_RUN_STATES.has(cpStatus) || TERMINAL_RUN_STATES.has(stepStatus)) {
-    return { inactive: true, proof: 'TERMINAL_RUN_STATUS' };
-  }
-  if (review && review.verdict && ACCEPTED_VERDICTS.includes(String(review.verdict).trim())) {
-    return { inactive: true, proof: 'TERMINAL_REVIEW_VERDICT' };
+  const hasTerminalOutcome =
+    TERMINAL_RUN_STATES.has(cpStatus) ||
+    TERMINAL_RUN_STATES.has(stepStatus) ||
+    Boolean(review && review.verdict && ACCEPTED_VERDICTS.includes(String(review.verdict).trim()));
+  const hasObservedInactiveLease = Boolean(
+    wt && wt.active === false && wt.leaseActive === false && wt.activityObservedAt
+  );
+  if (hasTerminalOutcome && hasObservedInactiveLease) {
+    return { inactive: true, proof: 'TERMINAL_AND_INACTIVE_OBSERVED' };
   }
   return { inactive: false, reason: 'ACTIVITY_UNOBSERVED' };
 }
@@ -141,8 +145,12 @@ function collectBoundWorktrees(checkpoint, workItemId) {
         owner: entry.owner || null,
         branch: entry.branch || null,
         headSha: entry.headSha || null,
-        active: entry.active === true,
-        leaseActive: entry.leaseActive === true,
+        active: entry.active === true ? true : entry.active === false ? false : null,
+        leaseActive: entry.leaseActive === true ? true : entry.leaseActive === false ? false : null,
+        activityObservedAt:
+          typeof entry.activityObservedAt === 'string' && entry.activityObservedAt.trim()
+            ? entry.activityObservedAt.trim()
+            : null,
       });
     }
   };

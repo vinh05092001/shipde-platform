@@ -361,6 +361,8 @@ test('AC3 & AC4: hygiene-check requires --dry-run, lists bound clean shipped can
           branch: 'feat/task-ai-227-clean',
           headSha: shippedSha,
           active: false,
+          leaseActive: false,
+          activityObservedAt: '2026-11-25T16:30:00Z',
         },
         {
           workItemId: 'TASK-AI-227',
@@ -369,6 +371,8 @@ test('AC3 & AC4: hygiene-check requires --dry-run, lists bound clean shipped can
           branch: 'feat/task-ai-227-dirty',
           headSha: shippedSha,
           active: false,
+          leaseActive: false,
+          activityObservedAt: '2026-11-25T16:30:00Z',
         },
       ],
     };
@@ -586,7 +590,8 @@ test('AC3 regression (Claude P1-a & P1-b): real producer checkpoint without term
     assert.equal(outPass.candidates.length, 0);
     const heldPass = outPass.retained.find((r) => path.resolve(r.path) === path.resolve(nestedWt));
     assert.ok(heldPass.reasons.includes('JUNCTION_AMBIGUOUS'));
-    assert.ok(!heldPass.reasons.includes('ACTIVITY_UNOBSERVED'));
+    // Terminal PASS + merged WITHOUT live lease/activity observation STILL fails closed with ACTIVITY_UNOBSERVED
+    assert.ok(heldPass.reasons.includes('ACTIVITY_UNOBSERVED'));
   } finally {
     // Unlink junction first before removing temp tree
     try {
