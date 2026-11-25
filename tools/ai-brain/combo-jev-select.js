@@ -337,7 +337,7 @@ function buildMemberCandidate(member, options = {}) {
     upstream,
     modelId: member.modelId,
     model: member.modelId,
-    modelFamily: modelFamilyOf(member.base),
+    modelFamily: modelFamilyOf(member.base, resolveStemAliases(options)),
     comboMember: true,
     comboName: base.combo,
     reasoningEffort: member.effort || null,
@@ -508,13 +508,17 @@ async function selectComboMember(options = {}) {
     handledBy = 'fallback';
   }
 
+  const stemAliases = resolveStemAliases(options);
   const built =
     chosen.lane === 'agy-pool'
-      ? agyPoolCandidates.buildAgyMemberCandidate(chosen, { modelFamilyOf })
+      ? agyPoolCandidates.buildAgyMemberCandidate(chosen, {
+          modelFamilyOf: (id) => modelFamilyOf(id, stemAliases),
+        })
       : buildMemberCandidate(chosen, {
           registry: options.registry,
           env: options.env,
           comboName,
+          stemAliases,
         });
 
   return {
