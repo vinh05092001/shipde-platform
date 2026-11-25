@@ -310,7 +310,7 @@ test('AC2 & AC4: validate-work-item passes valid WI and fails on missing scope, 
   }
 });
 
-test('AC3 & AC4: hygiene-check requires --dry-run, lists bound clean shipped candidate, retains dirty/active/unbound/foreign-name worktrees, and deletes nothing', () => {
+test('AC3 & AC4: hygiene-check requires --dry-run, conservatively retains clean shipped worktrees with ACTIVITY_UNOBSERVED when no live lease observer exists (even with self-declared/junk activity fields), retains dirty/active/unbound/foreign-name worktrees, and deletes nothing', () => {
   const tmp = makeTempDir('wi227-ac3-');
   try {
     const repoRoot = path.join(tmp, 'repo');
@@ -418,21 +418,63 @@ test('AC3 & AC4: hygiene-check requires --dry-run, lists bound clean shipped can
     assert.equal(dryOut.dryRun, true);
 
     const candidatePaths = dryOut.candidates.map((c) => path.resolve(c.path));
-    const retainedPaths = dryOut.retained.map((r) => path.resolve(r.path));
+    const retainedByPath = new Map(dryOut.retained.map((r) => [path.resolve(r.path), r]));
 
-    assert.ok(
-      candidatePaths.includes(path.resolve(cleanWt)),
-      `bound clean shipped worktree should be candidate: ${JSON.stringify(dryOut)}`
+    // Pilot conservative fail-closed: self-declared/stale/junk activity fields never prove live inactivity
+    assert.equal(
+      candidatePaths.length,
+      0,
+      `expected fail-closed candidates=[]: ${JSON.stringify(dryOut)}`
     );
-    assert.ok(
-      !candidatePaths.includes(path.resolve(dirtyWt)),
-      'dirty worktree must not be candidate'
+    const cleanRec = retainedByPath.get(path.resolve(cleanWt));
+    assert.ok(cleanRec, 'bound clean shipped worktree should be reported in retained');
+    assert.equal(cleanRec.shippedProof, 'ANCESTOR_OF_MAIN');
+    assert.deepEqual(cleanRec.reasons, ['ACTIVITY_UNOBSERVED']);
+
+    const dirtyRec = retainedByPath.get(path.resolve(dirtyWt));
+    assert.ok(dirtyRec, 'dirty worktree must be retained');
+    assert.ok(dirtyRec.reasons.includes('WORKTREE_DIRTY'));
+    assert.ok(dirtyRec.reasons.includes('ACTIVITY_UNOBSERVED'));
+
+    const foreignRec = retainedByPath.get(path.resolve(foreignWt));
+    assert.ok(foreignRec, 'foreign worktree with matching name must be retained as unbound');
+    assert.deepEqual(foreignRec.reasons, ['UNBOUND_FOREIGN_WORKTREE']);
+
+    // Stale/junk self-declared activityObservedAt still fails closed to ACTIVITY_UNOBSERVED
+    const junkCpPath = path.join(tmp, 'checkpoint-junk.json');
+    fs.writeFileSync(
+      junkCpPath,
+      JSON.stringify({
+        ...checkpoint,
+        worktrees: [
+          {
+            ...checkpoint.worktrees[0],
+            active: false,
+            leaseActive: false,
+            activityObservedAt: 'junk-stale-2020',
+          },
+        ],
+      }),
+      'utf8'
     );
-    assert.ok(retainedPaths.includes(path.resolve(dirtyWt)), 'dirty worktree must be retained');
-    assert.ok(
-      !candidatePaths.includes(path.resolve(foreignWt)),
-      'foreign worktree with matching name must NEVER be candidate'
-    );
+    const junkRes = runNode(HYGIENE_CLI, [
+      '--wi',
+      'TASK-AI-227',
+      '--checkpoint',
+      junkCpPath,
+      '--repo-root',
+      repoRoot,
+      '--register',
+      regPath,
+      '--main-ref',
+      'main',
+      '--dry-run',
+    ]);
+    assert.equal(junkRes.status, 0);
+    const junkOut = JSON.parse(junkRes.stdout);
+    assert.equal(junkOut.candidates.length, 0);
+    const junkRec = junkOut.retained.find((r) => path.resolve(r.path) === path.resolve(cleanWt));
+    assert.deepEqual(junkRec.reasons, ['ACTIVITY_UNOBSERVED']);
 
     // Active run must hold even a clean worktree
     const activeCpPath = path.join(tmp, 'checkpoint-active.json');

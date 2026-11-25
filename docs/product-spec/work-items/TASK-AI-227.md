@@ -26,6 +26,8 @@ Use the checkpoint reader in orchestrate/runtime-helpers.js and the current chec
 
 These are standalone operator commands. Leave live routing, gates, checkpoint schema, AGENTS.md, hooks and automatic deletion outside this pilot. The pilot makes no provider/network calls and uses no Docker daemon or credentials for its acceptance tests.
 
+Pilot boundary for `hygiene-check`: because no live worktree-lease/activity producer exists yet in the repository, historical or self-declared checkpoint flags never prove current inactivity; clean shipped worktrees are therefore conservatively held in `retained` with `ACTIVITY_UNOBSERVED` (`candidates: []`) until a live lease observer is wired in a follow-up Work Item.
+
 ## Acceptance
 
 | ID | Criterion | Evidence |

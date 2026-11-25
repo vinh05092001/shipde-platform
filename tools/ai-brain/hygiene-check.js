@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { extractCheckpointReview } = require('./orchestrate/checkpoint');
 const { runHardenedGit } = require('./orchestrate/hardened-git');
-const { SHA_40, ACCEPTED_VERDICTS } = require('./orchestrate/shared');
+const { SHA_40 } = require('./orchestrate/shared');
 const { parseCsvRecords } = require('./reconcile');
 
 const ALLOWED_FLAGS = new Set([
@@ -30,16 +30,6 @@ const ALLOWED_FLAGS = new Set([
 ]);
 
 const ACTIVE_RUN_STATES = new Set(['RUNNING', 'IN_PROGRESS', 'ACTIVE', 'LAUNCHING']);
-const TERMINAL_RUN_STATES = new Set([
-  'COMPLETED',
-  'PUBLISHED_DRAFT',
-  'MERGED',
-  'BLOCKED',
-  'BLOCKED_NO_ROUTE',
-  'REFUSED',
-  'FAILED',
-  'CLOSED',
-]);
 
 function parseCliArgs(argv) {
   const out = {};
@@ -112,7 +102,7 @@ function readRegisterRow(registerPath, workItemId) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-function hasPositiveInactiveProof({ checkpoint, liveStep, review, wt }) {
+function hasPositiveInactiveProof({ checkpoint, liveStep, wt }) {
   const cpStatus = String((checkpoint && checkpoint.status) || '').toUpperCase();
   const stepStatus = String((liveStep && liveStep.status) || '').toUpperCase();
   if (ACTIVE_RUN_STATES.has(cpStatus) || ACTIVE_RUN_STATES.has(stepStatus)) {
@@ -121,16 +111,9 @@ function hasPositiveInactiveProof({ checkpoint, liveStep, review, wt }) {
   if (wt && (wt.active === true || wt.leaseActive === true)) {
     return { inactive: false, reason: 'RUN_ACTIVE' };
   }
-  const hasTerminalOutcome =
-    TERMINAL_RUN_STATES.has(cpStatus) ||
-    TERMINAL_RUN_STATES.has(stepStatus) ||
-    Boolean(review && review.verdict && ACCEPTED_VERDICTS.includes(String(review.verdict).trim()));
-  const hasObservedInactiveLease = Boolean(
-    wt && wt.active === false && wt.leaseActive === false && wt.activityObservedAt
-  );
-  if (hasTerminalOutcome && hasObservedInactiveLease) {
-    return { inactive: true, proof: 'TERMINAL_AND_INACTIVE_OBSERVED' };
-  }
+  // Pilot fail-closed boundary: no live lease/activity producer exists yet in the
+  // repository, so self-declared or historical checkpoint fields never establish
+  // current inactivity for a checkout root. Always retain with ACTIVITY_UNOBSERVED.
   return { inactive: false, reason: 'ACTIVITY_UNOBSERVED' };
 }
 
