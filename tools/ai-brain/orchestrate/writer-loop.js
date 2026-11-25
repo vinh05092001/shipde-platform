@@ -216,7 +216,7 @@ function resolveLauncher(o, isolatedLauncher) {
       baseSha: job.baseSha,
       branch: job.branch,
       workItemId: job.title || (job.labels && job.labels.workItem) || null,
-      commitFileOnlyWriter: /^author(?:\.|$)|^(?:writer|repair)$/.test(job.labels?.role || ''),
+      commitFileOnlyWriter: WRITER_ROLE.test(job.labels?.role || ''),
       retainWorkerHead: job.retainWorkerHead || undefined,
       // TASK-AI-188: the dirty-root adoption check needs the run that owns the
       // retained root and the Work Item's allowed paths.
@@ -423,8 +423,8 @@ function runVerificationCommand(item, options) {
  * configures safe line endings and filemode, and verifies HEAD matches targetSha via hardened rev-parse.
  */
 
-// The roles whose commit is a writer commit; the isolated launcher uses the same rule.
-const WRITER_ROLE = /^author(?:\.|$)|^(?:writer|repair)$/;
+// The roles whose commit is a writer commit; aligned with routing.js (/i) and used by both launchers.
+const WRITER_ROLE = /^author(?:\.|$)|^(?:writer|repair)$/i;
 
 /**
  * Writer-scope check for an agy-pool writer, which runs outside the isolated
