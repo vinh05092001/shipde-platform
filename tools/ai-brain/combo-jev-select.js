@@ -255,14 +255,13 @@ function formatMemberCriterion(optId, member) {
  * provider/account identities are never leaked to JEV (`IDENTITY_PROHIBITED`).
  */
 function buildJevComboQuestion(assessment, eligibleMembers) {
-  const shortlisted = eligibleMembers;
   const options = [];
   const optionMap = new Map();
   const table = [];
   const criteria = {};
-  for (let i = 0; i < shortlisted.length; i += 1) {
+  for (let i = 0; i < eligibleMembers.length; i += 1) {
     const optId = 'M' + i;
-    const m = shortlisted[i];
+    const m = eligibleMembers[i];
     options.push(optId);
     optionMap.set(optId, m);
     table.push({
@@ -476,7 +475,7 @@ async function selectComboMember(options = {}) {
 
   const built =
     chosen.lane === 'agy-pool'
-      ? agyPoolCandidates.buildAgyMemberCandidate(chosen)
+      ? agyPoolCandidates.buildAgyMemberCandidate(chosen, { modelFamilyOf })
       : buildMemberCandidate(chosen, {
           registry: options.registry,
           env: options.env,

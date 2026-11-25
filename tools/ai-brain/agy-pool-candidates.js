@@ -178,19 +178,26 @@ function discoverAgyPoolMembers(options = {}) {
   return out.sort((a, b) => a.modelId.localeCompare(b.modelId));
 }
 
-function buildAgyMemberCandidate(member) {
+function buildAgyMemberCandidate(member, options = {}) {
   if (!member || !member.bareModel || !member.accountId) {
     return { error: 'AGY_POOL_MEMBER_INVALID', candidate: null };
   }
-  const leaf = String(member.bareModel).toLowerCase();
-  const familyMatch = /^([a-z]+)/.exec(leaf);
-  const modelFamily = familyMatch ? familyMatch[1] : leaf;
+  let modelFamily;
+  if (typeof options.modelFamilyOf === 'function') {
+    modelFamily = options.modelFamilyOf(member.bareModel);
+  } else {
+    const norm =
+      priorsRead.normaliseModelId(member.bareModel) || String(member.bareModel).toLowerCase();
+    const leaf = norm.includes('/') ? norm.split('/').pop() : norm;
+    const familyMatch = /^([a-z]+)/.exec(leaf);
+    modelFamily = familyMatch ? familyMatch[1] : leaf;
+  }
   const candidate = {
     harness: 'agy-pool',
     source: 'agy-pool',
     gateway: '',
     upstream: 'agy-pool',
-    accessPath: `ShipDe\\ShipDe-${member.accountId}`,
+    accessPath: agyPoolRuntime.poolTaskName(member.accountId),
     accountId: member.accountId,
     quotaScope: member.quotaScope || `${member.accountId}:${member.bucket || 'unknown'}`,
     modelId: member.bareModel,

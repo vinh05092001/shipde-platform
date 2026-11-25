@@ -210,7 +210,7 @@ function runAdapter(accountId, options) {
     };
   }
 
-  const taskName = `ShipDe\\ShipDe-${accountId}`;
+  const taskName = poolTaskName(accountId);
   const res = spawnSync('schtasks', ['/run', '/tn', taskName], {
     encoding: 'utf8',
     timeout: Number(opts.adapterTimeoutMs) > 0 ? Number(opts.adapterTimeoutMs) : 30000,
@@ -234,6 +234,10 @@ function runAdapter(accountId, options) {
     stderr: isTimeout ? defaultStderr : stderrText || defaultStderr,
     timedOut: isTimeout,
   };
+}
+
+function poolTaskName(accountId) {
+  return `ShipDe\\ShipDe-${accountId}`;
 }
 
 function pidAlive(pid) {
@@ -900,6 +904,7 @@ const exp = {
   parseCliModels,
   readLastRunElapsedMs,
   poolTimeoutMs,
+  poolTaskName,
 };
 
 module.exports = exp;

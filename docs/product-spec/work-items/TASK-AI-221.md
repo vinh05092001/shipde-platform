@@ -10,7 +10,7 @@
 | Dependencies | `TASK-AI-211` |
 | Assigned author | Wave 3 agy-pool team (AGY 08 + Claude + Codex); packaged by Antigravity (`agy08`, Gemini) |
 | Risk | `LOW`: opt-in flag `agyPoolShortlistEnabled` remains `false` by default; preserves single `shortlistForJev` implementation and 9router-only behavior when flag is off |
-| Allowed paths | `tools/ai-brain/agy-pool-candidates.js`; `tools/ai-brain/combo-jev-select.js`; `tools/ai-brain/sources.json`; `tools/ai-brain/test/wi-a1-agy-pool-shortlist.test.js`; `docs/product-spec/work-items/TASK-AI-221.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths | `tools/ai-brain/agy-pool-candidates.js`; `tools/ai-brain/agy-pool-runtime.js`; `tools/ai-brain/combo-jev-select.js`; `tools/ai-brain/sources.json`; `tools/ai-brain/test/wi-a1-agy-pool-shortlist.test.js`; `docs/product-spec/work-items/TASK-AI-221.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | Independent reviewer on a different model |
 | Branch | `feat/task-ai-221-agy-pool-shortlist` |
 
