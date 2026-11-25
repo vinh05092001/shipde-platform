@@ -345,7 +345,10 @@ function loadPool(rootDir, ctx) {
       evidenceData,
     }
   );
-  const annotated = candidatesApi.annotateCandidates(assembled, evidenceData, { now: Date.now() });
+  const annotated = candidatesApi.annotateCandidates(assembled, evidenceData, {
+    now: Date.now(),
+    loadQuotaState: false,
+  });
   return { annotated, evidenceData, accounts, registry };
 }
 

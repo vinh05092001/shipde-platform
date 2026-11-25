@@ -88,11 +88,14 @@ function siblingRouteProbe(key, probes) {
 // Reads only records of this exact route. Another gateway's record, or one made
 // under another account, says nothing about it, so the answer stays UNKNOWN.
 function routeStatusOf(c, routeHealth, quotaState) {
-  const healthKey = require('./route-health').healthKey(c.modelId, {
-    id: c.gateway,
-    accountId: c.accountId,
-  });
-  const h = routeHealth?.paths?.[healthKey];
+  const healthKey =
+    routeHealth && routeHealth.paths
+      ? require('./route-health').healthKey(c.modelId, {
+          id: c.gateway,
+          accountId: c.accountId,
+        })
+      : null;
+  const h = healthKey ? routeHealth?.paths?.[healthKey] : null;
   const scopes = quotaState?.scopes || {};
   const q = [scopes[`${c.gateway}::${c.upstream}`], scopes[c.upstream]].find(
     (r) => r && r.source === c.gateway && r.upstream === c.upstream
