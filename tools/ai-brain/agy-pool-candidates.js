@@ -97,14 +97,17 @@ function minBucketRemaining(group) {
 function readAccountQuotaGroups(accountId, options = {}) {
   if (options.quotaSnapshots && options.quotaSnapshots[accountId]) {
     const snap = options.quotaSnapshots[accountId];
-    return Array.isArray(snap.groups) ? snap.groups : snap.command?.data?.groups || [];
+    if (Array.isArray(snap.groups)) return snap.groups;
+    const nested = snap.command?.data?.groups;
+    return Array.isArray(nested) ? nested : [];
   }
   const dir = agyPoolRuntime.accountDir(accountId, options);
   const quotaFile = path.join(dir, 'quota-out.txt');
   try {
     if (!fs.existsSync(quotaFile)) return [];
     const parsed = JSON.parse(fs.readFileSync(quotaFile, 'utf8').replace(/^\uFEFF/, ''));
-    return parsed?.command?.data?.groups || [];
+    const groups = parsed?.command?.data?.groups;
+    return Array.isArray(groups) ? groups : [];
   } catch {
     return [];
   }
@@ -128,7 +131,9 @@ function discoverAgyPoolMembers(options = {}) {
 
   for (const accountId of accountIds) {
     const groups = readAccountQuotaGroups(accountId, options);
+    if (!Array.isArray(groups)) continue;
     for (const group of groups) {
+      if (!group || typeof group !== 'object') continue;
       const bucket = bucketKeyFromGroup(group);
       if (!bucket) continue;
       const remaining = minBucketRemaining(group);

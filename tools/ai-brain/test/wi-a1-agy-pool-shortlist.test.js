@@ -259,3 +259,65 @@ test('WI-A1 enabled shortlist: caps at maxOptions with lane diversity and enforc
   assert.equal(rev.independentApplied, true);
   assert.notEqual(comboJev.modelFamilyOf(rev.selected.base), 'claude');
 });
+
+test('WI-A1 fail-closed: malformed non-array quota groups are skipped and 9router selection still succeeds', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const reg = sourcesApi.loadSources();
+  const enabledReg = {
+    ...reg,
+    dispatch: { ...reg.dispatch, agyPoolShortlistEnabled: true },
+  };
+
+  // 1) In-memory quotaSnapshots with non-array command.data.groups (object instead of array)
+  const malformedSnaps = {
+    agy03: { command: { data: { groups: { unexpected: true } } } },
+    agy04: { groups: 'not-an-array', command: { data: { groups: { broken: 1 } } } },
+    agy06: { groups: [null, 42, 'bad-entry'] },
+  };
+  assert.deepEqual(
+    agyPoolCandidates.discoverAgyPoolMembers({
+      registry: enabledReg,
+      quotaSnapshots: malformedSnaps,
+    }),
+    []
+  );
+
+  // 2) File-based quota-out.txt with valid JSON whose command.data.groups is an object
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wi-a1-malformed-'));
+  try {
+    const accDir = path.join(tmpDir, 'agy05');
+    fs.mkdirSync(accDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(accDir, 'quota-out.txt'),
+      JSON.stringify({ command: { data: { groups: { notAnArray: true } } } }),
+      'utf8'
+    );
+    assert.deepEqual(
+      agyPoolCandidates.discoverAgyPoolMembers({
+        registry: enabledReg,
+        accounts: ['agy05'],
+        runsDir: tmpDir,
+      }),
+      []
+    );
+
+    // 3) selectComboMember with agy-pool enabled + malformed AGY snapshot still picks 9router member
+    const res = await comboJev.selectComboMember({
+      item: { id: 'FEAT-MALFORMED-SNAP', complexity: 'standard', risk: 'LOW' },
+      role: 'writer',
+      members: ['gcli/grok-4.7', 'bzl/glm-5.3'],
+      registry: enabledReg,
+      env: { NINEROUTER_API_KEY: 'test-key' },
+      agyPoolOptions: { accounts: ['agy05'], runsDir: tmpDir },
+      maxOptions: 6,
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.selected.lane, '9router');
+    assert.equal(res.candidate.source, '9router');
+    assert.notEqual(res.candidate.harness, 'agy-pool');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
