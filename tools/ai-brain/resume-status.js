@@ -118,7 +118,7 @@ function inspectCheckout(checkoutPath) {
     };
   }
   const branchRes = runHardenedGit(resolved, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  const statusRes = runHardenedGit(resolved, ['status', '--porcelain']);
+  const statusRes = runHardenedGit(resolved, ['--no-optional-locks', 'status', '--porcelain']);
   const observedHeadSha = String(headRes.stdout || '').trim();
   const observedBranch =
     branchRes && branchRes.status === 0 ? String(branchRes.stdout || '').trim() : null;

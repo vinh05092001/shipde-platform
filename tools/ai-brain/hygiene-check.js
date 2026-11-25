@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { extractCheckpointReview } = require('./orchestrate/checkpoint');
 const { runHardenedGit } = require('./orchestrate/hardened-git');
-const { SHA_40 } = require('./orchestrate/shared');
+const { SHA_40, ACCEPTED_VERDICTS } = require('./orchestrate/shared');
 const { parseCsvRecords } = require('./reconcile');
 
 const ALLOWED_FLAGS = new Set([
@@ -30,6 +30,16 @@ const ALLOWED_FLAGS = new Set([
 ]);
 
 const ACTIVE_RUN_STATES = new Set(['RUNNING', 'IN_PROGRESS', 'ACTIVE', 'LAUNCHING']);
+const TERMINAL_RUN_STATES = new Set([
+  'COMPLETED',
+  'PUBLISHED_DRAFT',
+  'MERGED',
+  'BLOCKED',
+  'BLOCKED_NO_ROUTE',
+  'REFUSED',
+  'FAILED',
+  'CLOSED',
+]);
 
 function parseCliArgs(argv) {
   const out = {};
@@ -102,6 +112,24 @@ function readRegisterRow(registerPath, workItemId) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+function hasPositiveInactiveProof({ checkpoint, liveStep, review, wt }) {
+  const cpStatus = String((checkpoint && checkpoint.status) || '').toUpperCase();
+  const stepStatus = String((liveStep && liveStep.status) || '').toUpperCase();
+  if (ACTIVE_RUN_STATES.has(cpStatus) || ACTIVE_RUN_STATES.has(stepStatus)) {
+    return { inactive: false, reason: 'RUN_ACTIVE' };
+  }
+  if (wt && (wt.active === true || wt.leaseActive === true)) {
+    return { inactive: false, reason: 'RUN_ACTIVE' };
+  }
+  if (TERMINAL_RUN_STATES.has(cpStatus) || TERMINAL_RUN_STATES.has(stepStatus)) {
+    return { inactive: true, proof: 'TERMINAL_RUN_STATUS' };
+  }
+  if (review && review.verdict && ACCEPTED_VERDICTS.includes(String(review.verdict).trim())) {
+    return { inactive: true, proof: 'TERMINAL_REVIEW_VERDICT' };
+  }
+  return { inactive: false, reason: 'ACTIVITY_UNOBSERVED' };
+}
+
 function collectBoundWorktrees(checkpoint, workItemId) {
   const byPath = new Map();
   const addBinding = (entry) => {
@@ -149,18 +177,42 @@ function collectBoundWorktrees(checkpoint, workItemId) {
       leaseActive: false,
     });
   }
-  return Array.from(byPath.values());
+  return {
+    worktrees: Array.from(byPath.values()),
+    liveStep: liveStep || null,
+    review: review || null,
+  };
 }
 
-function hasJunctionOrSymlinkAmbiguity(wtPath) {
+function findJunctionOrSymlinkInTree(wtPath) {
   try {
-    if (fs.lstatSync(wtPath).isSymbolicLink()) return true;
-    const nm = path.join(wtPath, 'node_modules');
-    if (fs.existsSync(nm) && fs.lstatSync(nm).isSymbolicLink()) return true;
+    if (fs.lstatSync(wtPath).isSymbolicLink()) return wtPath;
   } catch (_) {
-    return true;
+    return wtPath;
   }
-  return false;
+  const stack = [wtPath];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (_) {
+      return current;
+    }
+    for (const entry of entries) {
+      if (entry.name === '.git') continue;
+      const full = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) return full;
+      try {
+        const lst = fs.lstatSync(full);
+        if (lst.isSymbolicLink()) return full;
+        if (lst.isDirectory()) stack.push(full);
+      } catch (_) {
+        return full;
+      }
+    }
+  }
+  return null;
 }
 
 function verifyShippedEvidence({ repoRoot, mainRef, registerRow, observedHeadSha, checkpoint }) {
@@ -229,9 +281,12 @@ function buildHygienePreview({ workItemId, checkpointPath, repoRoot, registerPat
     };
   }
 
-  const runActive = ACTIVE_RUN_STATES.has(String(checkpoint.status || '').toUpperCase());
   const registerRow = readRegisterRow(registerPath, workItemId);
-  const boundWorktrees = collectBoundWorktrees(checkpoint, workItemId);
+  const {
+    worktrees: boundWorktrees,
+    liveStep,
+    review,
+  } = collectBoundWorktrees(checkpoint, workItemId);
   const boundPathSet = new Set(boundWorktrees.map((w) => normPath(w.path)));
 
   const candidates = [];
@@ -242,7 +297,11 @@ function buildHygienePreview({ workItemId, checkpointPath, repoRoot, registerPat
     const reasons = [];
     if (!wt.owner) reasons.push('MISSING_OWNER_BINDING');
     if (repoRoot && !isInsideRoot(wt.path, repoRoot)) reasons.push('OUTSIDE_EXPECTED_ROOT');
-    if (runActive || wt.active || wt.leaseActive) reasons.push('RUN_ACTIVE');
+
+    const inactivity = hasPositiveInactiveProof({ checkpoint, liveStep, review, wt });
+    if (!inactivity.inactive) {
+      reasons.push(inactivity.reason);
+    }
 
     if (!fs.existsSync(wt.path)) {
       unknowns.push({
@@ -254,14 +313,24 @@ function buildHygienePreview({ workItemId, checkpointPath, repoRoot, registerPat
       continue;
     }
 
-    if (hasJunctionOrSymlinkAmbiguity(wt.path)) {
+    const junctionPath = findJunctionOrSymlinkInTree(wt.path);
+    if (junctionPath) {
       reasons.push('JUNCTION_AMBIGUOUS');
     }
 
     const extraSafe = repoRoot ? [repoRoot] : undefined;
     const headRes = runHardenedGit(wt.path, ['rev-parse', 'HEAD'], extraSafe);
     const branchRes = runHardenedGit(wt.path, ['rev-parse', '--abbrev-ref', 'HEAD'], extraSafe);
-    const statusRes = runHardenedGit(wt.path, ['status', '--porcelain'], extraSafe);
+    const statusRes = runHardenedGit(
+      wt.path,
+      ['--no-optional-locks', 'status', '--porcelain'],
+      extraSafe
+    );
+    const ignoredRes = runHardenedGit(
+      wt.path,
+      ['--no-optional-locks', 'status', '--porcelain', '--ignored=matching'],
+      extraSafe
+    );
 
     if (!headRes || headRes.status !== 0) {
       reasons.push('NOT_READABLE_GIT_CHECKOUT');
@@ -269,6 +338,10 @@ function buildHygienePreview({ workItemId, checkpointPath, repoRoot, registerPat
     const observedHead = headRes && headRes.status === 0 ? headRes.stdout.trim() : null;
     const observedBranch = branchRes && branchRes.status === 0 ? branchRes.stdout.trim() : null;
     const dirty = statusRes && statusRes.status === 0 ? statusRes.stdout.trim().length > 0 : true;
+    const ignoredLines =
+      ignoredRes && ignoredRes.status === 0
+        ? ignoredRes.stdout.split(/\r?\n/).filter((line) => line.startsWith('!! '))
+        : [];
 
     if (dirty) reasons.push('WORKTREE_DIRTY');
     if (wt.branch && observedBranch && wt.branch !== observedBranch) {
@@ -295,7 +368,11 @@ function buildHygienePreview({ workItemId, checkpointPath, repoRoot, registerPat
       owner: wt.owner,
       branch: observedBranch,
       headSha: observedHead,
+      inactivityProof: inactivity.inactive ? inactivity.proof : null,
       shippedProof: shipped.proven ? shipped.proof : null,
+      ...(junctionPath ? { junctionPath } : {}),
+      hasIgnoredLocalFiles: ignoredLines.length > 0,
+      ignoredFilesCount: ignoredLines.length,
       reasons,
     };
 

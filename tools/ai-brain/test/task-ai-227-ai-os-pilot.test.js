@@ -468,6 +468,134 @@ test('AC3 & AC4: hygiene-check requires --dry-run, lists bound clean shipped can
   }
 });
 
+test('AC3 regression (Claude P1-a & P1-b): real producer checkpoint without terminal proof fails closed with ACTIVITY_UNOBSERVED, and nested junction in apps/web/node_modules is retained with JUNCTION_AMBIGUOUS', () => {
+  const tmp = makeTempDir('wi227-ac3-reg-');
+  try {
+    const repoRoot = path.join(tmp, 'repo');
+    const wtRoot = path.join(repoRoot, '.worktrees');
+    const externalStore = path.join(tmp, 'external-store');
+    fs.mkdirSync(wtRoot, { recursive: true });
+    fs.mkdirSync(externalStore, { recursive: true });
+
+    runGit(repoRoot, ['init', '-b', 'main']);
+    fs.writeFileSync(path.join(repoRoot, 'README.md'), '# root\n', 'utf8');
+    runGit(repoRoot, ['add', 'README.md']);
+    runGit(repoRoot, ['commit', '-m', 'root init']);
+
+    // Clean worktree at shipped commit with a nested junction at apps/web/node_modules
+    const nestedWt = path.join(wtRoot, 'w1');
+    runGit(repoRoot, ['worktree', 'add', '-b', 'feat/task-x', nestedWt, 'main']);
+    fs.mkdirSync(path.join(nestedWt, 'apps', 'web'), { recursive: true });
+    fs.writeFileSync(
+      path.join(nestedWt, 'apps', 'web', 'index.js'),
+      'module.exports = 1;\n',
+      'utf8'
+    );
+    runGit(nestedWt, ['add', 'apps/web/index.js']);
+    runGit(nestedWt, ['commit', '-m', 'shipped']);
+    const shippedSha = runGit(nestedWt, ['rev-parse', 'HEAD']);
+    runGit(repoRoot, ['merge', '--ff-only', shippedSha]);
+
+    // Create a nested junction (Windows) or symlink (POSIX) at apps/web/node_modules
+    const nestedNm = path.join(nestedWt, 'apps', 'web', 'node_modules');
+    fs.symlinkSync(externalStore, nestedNm, process.platform === 'win32' ? 'junction' : 'dir');
+    // Ignore node_modules so git status stays clean while the nested junction exists
+    fs.writeFileSync(path.join(repoRoot, '.git', 'info', 'exclude'), 'node_modules/\n', 'utf8');
+
+    // Real producer checkpoint shape: liveSteps[WI].review.receipt WITHOUT verdict/terminal status
+    const cpUnobservedPath = path.join(tmp, 'cp-unobserved.json');
+    fs.writeFileSync(
+      cpUnobservedPath,
+      JSON.stringify({
+        mergeCommit: shippedSha,
+        liveSteps: {
+          'TASK-X': {
+            launch: { startedAt: '2026-11-25T00:00:00Z' },
+            review: {
+              receipt: {
+                sha: shippedSha,
+                workerRoot: nestedWt,
+                writerCandidateKey: 'agy-pool::agy08::gemini-4-neon-high',
+              },
+            },
+          },
+        },
+      }),
+      'utf8'
+    );
+
+    const res = runNode(HYGIENE_CLI, [
+      '--wi',
+      'TASK-X',
+      '--checkpoint',
+      cpUnobservedPath,
+      '--repo-root',
+      repoRoot,
+      '--main-ref',
+      'main',
+      '--dry-run',
+    ]);
+    assert.equal(res.status, 0, `expected exit 0: ${res.stdout} ${res.stderr}`);
+    const out = JSON.parse(res.stdout);
+    assert.equal(out.candidates.length, 0, `must fail closed: ${JSON.stringify(out)}`);
+    const held = out.retained.find((r) => path.resolve(r.path) === path.resolve(nestedWt));
+    assert.ok(held, 'nested junction worktree must be retained');
+    assert.ok(
+      held.reasons.includes('ACTIVITY_UNOBSERVED'),
+      `expected ACTIVITY_UNOBSERVED: ${JSON.stringify(held)}`
+    );
+    assert.ok(
+      held.reasons.includes('JUNCTION_AMBIGUOUS'),
+      `expected JUNCTION_AMBIGUOUS: ${JSON.stringify(held)}`
+    );
+
+    // Even WITH terminal PASS verdict, nested junction STILL forces retention
+    const cpPassPath = path.join(tmp, 'cp-pass.json');
+    fs.writeFileSync(
+      cpPassPath,
+      JSON.stringify({
+        mergeCommit: shippedSha,
+        liveSteps: {
+          'TASK-X': {
+            review: {
+              receipt: {
+                sha: shippedSha,
+                verdict: 'PASS',
+                workerRoot: nestedWt,
+                writerCandidateKey: 'agy-pool::agy08::gemini-4-neon-high',
+              },
+            },
+          },
+        },
+      }),
+      'utf8'
+    );
+    const resPass = runNode(HYGIENE_CLI, [
+      '--wi',
+      'TASK-X',
+      '--checkpoint',
+      cpPassPath,
+      '--repo-root',
+      repoRoot,
+      '--main-ref',
+      'main',
+      '--dry-run',
+    ]);
+    assert.equal(resPass.status, 0);
+    const outPass = JSON.parse(resPass.stdout);
+    assert.equal(outPass.candidates.length, 0);
+    const heldPass = outPass.retained.find((r) => path.resolve(r.path) === path.resolve(nestedWt));
+    assert.ok(heldPass.reasons.includes('JUNCTION_AMBIGUOUS'));
+    assert.ok(!heldPass.reasons.includes('ACTIVITY_UNOBSERVED'));
+  } finally {
+    // Unlink junction first before removing temp tree
+    try {
+      fs.unlinkSync(path.join(tmp, 'repo', '.worktrees', 'w1', 'apps', 'web', 'node_modules'));
+    } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('AC4: missing or invalid CLI inputs produce clear nonzero JSON results', () => {
   const r1 = runNode(RESUME_CLI, ['--wi', 'TASK-AI-227']);
   assert.notEqual(r1.status, 0);
