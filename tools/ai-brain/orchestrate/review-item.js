@@ -50,6 +50,7 @@ function writeReviewManifestAndArtifact(opts) {
     findings,
     tests,
     roundNumber,
+    reviewerNotRunReason,
   } = opts;
 
   if (!dir) return null;
@@ -71,7 +72,11 @@ function writeReviewManifestAndArtifact(opts) {
     '',
     '## Findings',
     findingsList.length === 0
-      ? 'No open findings.'
+      ? reviewerNotRunReason
+        ? /^(?:VERIFICATION_|FORMAT_GATE|TOOL_GATE)/i.test(String(reviewerNotRunReason))
+          ? `Reviewer not run: ${reviewerNotRunReason}`
+          : `No reviewer verdict: ${reviewerNotRunReason}`
+        : 'No open findings.'
       : findingsList
           .map((f) => {
             const st = f && (f.status || (f.open ? 'open' : 'resolved'));
@@ -1069,6 +1074,10 @@ async function reviewItem(
       } else {
         currentTests.push({ command: 'test', result: 'pass', summary: 'pass' });
       }
+      const lastRound =
+        review.rounds && review.rounds.length > 0 ? review.rounds[review.rounds.length - 1] : null;
+      const reviewerNotRunReason =
+        lastRound && !lastRound.verdict && lastRound.cause ? String(lastRound.cause) : null;
       const roundManifest = writeReviewManifestAndArtifact({
         dir: decisionDir,
         repoCwd: currentRepoCwd,
@@ -1080,13 +1089,10 @@ async function reviewItem(
         verdict:
           review.verdict ||
           (review.status === ReviewStatus.COMPLETED ? 'PASS' : 'CHANGES_REQUIRED'),
-        findings:
-          (review.rounds &&
-            review.rounds[review.rounds.length - 1] &&
-            review.rounds[review.rounds.length - 1].findings) ||
-          [],
+        findings: (lastRound && lastRound.findings) || [],
         tests: currentTests,
         roundNumber: review.rounds ? review.rounds.length : 1,
+        reviewerNotRunReason,
       });
       if (roundManifest) {
         entry.reviewManifest = roundManifest.manifestPath;
