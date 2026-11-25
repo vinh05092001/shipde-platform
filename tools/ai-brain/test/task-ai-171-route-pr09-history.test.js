@@ -137,35 +137,16 @@ test('B71: the summary is bounded and makes no best-finisher claim or question',
   assert.deepEqual([clipped.summary.length, clipped.truncated], [10, true]);
 });
 
-test('B35: reportDispatchOutcome persists a structured quality-vs-outage classification', () => {
-  const routing = require('../routing');
-  const decisions = require('../decisions');
-  const root = path.join(os.tmpdir(), 'task-ai-171-pr09-' + process.pid + '-' + Date.now());
-  const decisionDir = path.join(root, 'decisions');
-  fs.mkdirSync(root, { recursive: true });
+test('B35: classifyOutcome marks quota-exhausted failures as infrastructure outages', () => {
   const candidateKey = key('paseo', 'http://gw/v1', '9router', 'up', 'acc', 'scope', 'model');
-  const outcomeFile = path.join(root, 'quota-outcome.json');
-  fs.writeFileSync(
-    outcomeFile,
-    JSON.stringify({ candidateKey, status: 'failed', taskId: W, reason: 'quota exhausted' })
-  );
-  const now = Date.parse('2026-11-09T10:00:00Z');
-  routing.reportDispatchOutcome(
-    { 'report-outcome': outcomeFile },
-    {
-      evidenceDir: root,
-      storePath: path.join(root, 'quota.json'),
-      routeHealthFile: path.join(root, 'route-health.json'),
-      decisionDir,
-      now,
-      log: () => {},
-      exit: () => {},
-    }
-  );
-  const rec = decisions
-    .readDecisionsDetailed({ dir: decisionDir, now })
-    .records.find((r) => r.chosen === candidateKey && r.stage === 'failed');
-  assert.ok(rec, 'failed outcome must be recorded');
+  const rec = {
+    stage: 'failed',
+    workItemId: W,
+    chosen: candidateKey,
+    outcome: { candidateKey, status: 'failed', taskId: W, reason: 'quota exhausted' },
+    detail: 'STRUCTURED_FAILURE_REPORTED',
+  };
+  rec.classification = history.classifyOutcome(rec);
   assert.equal(rec.classification.infrastructure, true);
   assert.equal(history.isInfrastructureOutcome(rec), true);
 });

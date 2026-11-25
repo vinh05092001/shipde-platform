@@ -26,20 +26,11 @@
  * refusal rule, not a routing choice.
  */
 
-const fs = require('fs');
-const path = require('path');
-
 const jev = require('./jev');
 const evidence = require('./evidence');
-const decisions = require('./decisions');
 const ranking = require('./ranking');
 const { loadPriors, priorFor } = require('./priors');
-const {
-  candidateKey,
-  parseCandidateKey,
-  registryPrefixes,
-  modelBase,
-} = require('./discovery/identity');
+const { candidateKey, registryPrefixes, modelBase } = require('./discovery/identity');
 const sourceRegistry = require('./sources');
 const BACKEND_MODEL_PREFIXES = registryPrefixes(sourceRegistry.loadSources());
 const { contextRefusal, hasLauncherWriter } = require('./harness');
@@ -107,15 +98,6 @@ const ROLE_FALLBACK_PROFILE = Object.freeze({
   researcher: 'BALANCED',
   integrator: 'BALANCED',
 });
-
-/**
- * Stall thresholds for a pinned execution (TASK-AI-65 contract):
- * a request that has not finished within 7 minutes is stalled at the request
- * level; a structured failure that has gone unresolved for 12 minutes forces
- * reselection rather than another wait.
- */
-const STALL_REQUEST_FINISH_MS = 7 * 60 * 1000;
-const STALL_STRUCTURED_FAILURE_MS = 12 * 60 * 1000;
 
 /** A busy candidate loses this much score per reservation it already holds. */
 const BUSY_PENALTY_PER_RESERVATION = 20;
@@ -291,10 +273,6 @@ function jevModelChoiceQuestion(profile, candidates) {
     }),
     options,
   };
-}
-
-function candidateIdentityKey(candidate) {
-  return candidateKey(candidate);
 }
 
 async function adviseModelChoice(result, profile, options) {
@@ -629,11 +607,6 @@ async function assessTask(profile, opts) {
         ? 'QUALITY_FIRST enforced for high-risk domains: ' + (profile.riskDomains || []).join(', ')
         : (result.jev && result.jev.reason) || result.reason || null,
   };
-}
-
-/** The Claude-family policy refusal for a role and model id, or null. */
-function claudeFamilyExclusion(role, modelId) {
-  return null;
 }
 
 function roleLaneMismatch(role, qualifiedRoles) {
@@ -1723,215 +1696,6 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   };
 }
 
-async function adviseRankedModelChoice(result, profile, options) {
-  const advice = await adviseModelChoice(result, profile, options);
-  return Object.assign({}, result, { chosen: advice.chosen, modelChoice: advice.advice });
-}
-
-/**
- * Stall assessment for a reported outcome, using the two contract thresholds.
- * `requestFinishStalled` marks a request that should have finished; a failed
- * outcome past the structured-failure window must be reselected, not awaited.
- */
-function stallAssessment(outcome, now) {
-  const at = Date.parse((outcome && outcome.lastProgressAt) || '');
-  const hasProgress = Number.isFinite(at);
-  const elapsed = hasProgress ? Math.max(0, now - at) : null;
-  const failed = !['completed', 'passed', 'success'].includes(
-    String((outcome && outcome.status) || '').toLowerCase()
-  );
-  return {
-    lastProgressAt: (outcome && outcome.lastProgressAt) || null,
-    elapsedMs: elapsed,
-    requestFinishStalled: elapsed !== null && elapsed > STALL_REQUEST_FINISH_MS,
-    reselectRequired: failed && (elapsed === null || elapsed > STALL_STRUCTURED_FAILURE_MS),
-  };
-}
-
-/**
- * Apply a structured execution outcome for a pinned candidate: evidence and
- * cooldown are updated through the existing evidence store (which classifies
- * the failure and scopes the cooldown), and one decision-log line records the
- * whole outcome. The next ranking round reads exactly these stores, so it
- * sees the failure before it picks again.
- */
-function reportDispatchOutcome(args, deps) {
-  const d = deps || {};
-  const log = d.log || console.log;
-  const error = d.error || console.error;
-  const exit = d.exit || process.exit;
-  const rootDir = args.root || d.rootDir || process.cwd();
-  const file = path.resolve(rootDir, args['report-outcome'] || args.reportOutcome);
-
-  let outcome;
-  try {
-    outcome = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
-  } catch (err) {
-    error('OUTCOME_UNREADABLE: ' + file + ' (' + err.message + ')');
-    exit(2);
-    return { exitCode: 2 };
-  }
-
-  const parsedBeforeMapping =
-    outcome && outcome.candidateKey ? parseCandidateKey(outcome.candidateKey) : null;
-  if (
-    outcome &&
-    ((outcome.harness === 'agy-pool' && outcome.accountId) ||
-      (parsedBeforeMapping &&
-        parsedBeforeMapping.harness === 'agy-pool' &&
-        parsedBeforeMapping.account))
-  ) {
-    const poolAccount = outcome.accountId || parsedBeforeMapping.account;
-    const { isValidAccountId } = require('./agy-pool-runtime');
-    if (!isValidAccountId(poolAccount)) {
-      error('OUTCOME_INVALID: invalid agy-pool account: ' + String(poolAccount));
-      exit(2);
-      return { exitCode: 2, reason: 'INVALID_ACCOUNT_ID' };
-    }
-    const { getHarness } = require('./harness');
-    const adapter = getHarness('agy-pool');
-    const mapped = adapter.mapOutcome(poolAccount, outcome.candidateKey, {
-      fakeRunsDir: d.fakeRunsDir,
-      home: d.home,
-    });
-    outcome = Object.assign({}, outcome, mapped);
-  }
-
-  const missing = ['candidateKey', 'status'].filter(
-    (f) => outcome[f] === undefined || outcome[f] === null || outcome[f] === ''
-  );
-  const parsed = parseCandidateKey(outcome.candidateKey);
-  if (missing.length || !parsed) {
-    error(
-      'OUTCOME_INVALID: ' +
-        (missing.length ? 'missing ' + missing.join(', ') : 'candidateKey is not a 7-part key')
-    );
-    exit(2);
-    return { exitCode: 2, missing };
-  }
-
-  const candidate = {
-    harness: parsed.harness,
-    accessPath: parsed.accessPath,
-    gateway: parsed.gateway,
-    upstream: parsed.upstream,
-    accountId: parsed.account,
-    quotaScope: parsed.quotaScope,
-    modelId: parsed.modelId,
-  };
-  const now = d.now || Date.now();
-  const passed = ['completed', 'passed', 'success'].includes(String(outcome.status).toLowerCase());
-  const failed = ['failed', 'error', 'aborted', 'refused', 'timeout', 'cancelled'].includes(
-    String(outcome.status).toLowerCase()
-  );
-  const terminal = passed || failed;
-  const stall = stallAssessment(outcome, now);
-  const evidenceDir = d.evidenceDir || path.join(__dirname, 'data', 'evidence');
-
-  if (terminal || stall.stalled) {
-    if (terminal) {
-      evidence.recordOutcome(evidenceDir, candidate, {
-        status: failed ? 'failed' : 'passed',
-        exitCode: failed ? 1 : 0,
-        body: typeof outcome.reason === 'string' ? outcome.reason : null,
-        stderr: typeof outcome.reason === 'string' ? outcome.reason : null,
-        cause: typeof outcome.errorClass === 'string' ? outcome.errorClass : null,
-        httpStatus: Number.isFinite(Number(outcome.httpStatus))
-          ? Number(outcome.httpStatus)
-          : undefined,
-        // The reporter observed when this budget clears. Passing it through is what
-        // keeps "quota exhausted until 01:55" from decaying into a five-minute
-        // cooldown the classifier scraped out of a message.
-        cooldownUntil:
-          failed && outcome.cooldownUntil !== undefined ? outcome.cooldownUntil : undefined,
-        level: evidence.Level.API,
-        source: 'report-outcome',
-      });
-
-      const quotaStore = require('./quota-store');
-      const targetPath = quotaStore.storePath({ home: d.home, path: d.storePath });
-      quotaStore.releaseReservation(
-        outcome.taskId || outcome.workItemId || 'TASK-REPORT-OUTCOME',
-        outcome.candidateKey,
-        {
-          home: d.home,
-          path: targetPath,
-          now,
-        }
-      );
-    }
-
-    try {
-      const routeHealthApi = require('./route-health');
-      const storeOrPath = routeHealthApi.resolveRouteHealthFile(args, d);
-      const modelId = candidate.modelId || candidate.model;
-      const routeId = candidate.upstream || candidate.gateway || candidate.accessPath;
-      const isTimeout =
-        stall.stalled ||
-        String(outcome.status).toLowerCase() === 'timeout' ||
-        outcome.timedOut === true ||
-        /timeout|stall|hang/i.test(String(outcome.reason || outcome.errorClass || ''));
-      routeHealthApi.recordExecutionResult(
-        storeOrPath,
-        modelId,
-        routeId,
-        {
-          status: passed ? 200 : isTimeout ? 408 : Number(outcome.httpStatus) || 500,
-          ok: passed,
-          timedOut: Boolean(isTimeout),
-          reason: typeof outcome.reason === 'string' ? outcome.reason : outcome.errorClass,
-          elapsedMs: Number(outcome.elapsedMs) || undefined,
-          concurrency: Number(outcome.concurrency) || undefined,
-        },
-        {
-          now,
-          persist: d.persistRouteHealth !== false,
-          loadStore: d.loadStore || d.loader,
-          saveStore: d.saveStore || d.saver,
-        }
-      );
-    } catch (_) {}
-  }
-
-  const recorded = {
-    stage: terminal
-      ? failed
-        ? decisions.Stage.FAILED
-        : decisions.Stage.COMPLETED
-      : decisions.Stage.RESUMED,
-    workItemId: outcome.taskId || 'TASK-REPORT-OUTCOME',
-    role: outcome.role || null,
-    chosen: outcome.candidateKey,
-    outcome,
-    stall,
-    detail: terminal
-      ? failed
-        ? stall.reselectRequired
-          ? 'STRUCTURED_FAILURE_RESELECT_REQUIRED'
-          : 'STRUCTURED_FAILURE_REPORTED'
-        : 'OUTCOME_REPORTED'
-      : 'PROGRESS_REPORTED',
-  };
-  // Persist the quality-vs-outage classification with the outcome so later
-  // readers never have to re-derive it from free text or commit counts.
-  recorded.classification = outcomeHistory.classifyOutcome(recorded);
-  decisions.recordDecision(recorded, { dir: d.decisionDir, now });
-
-  log(
-    'Outcome ' +
-      (terminal ? (failed ? 'FAILED' : 'COMPLETED') : 'IN_PROGRESS') +
-      ' for ' +
-      outcome.candidateKey +
-      (outcome.errorClass ? ' (class ' + outcome.errorClass + ')' : '') +
-      (terminal ? '; evidence and cooldown updated' : '; progress reported') +
-      (stall.reselectRequired
-        ? '; RESELECT_REQUIRED (past ' + STALL_STRUCTURED_FAILURE_MS + 'ms)'
-        : '')
-  );
-  exit(0);
-  return { exitCode: 0, failed, stall, recorded };
-}
-
 module.exports = {
   reliabilityScoreOf,
   TASK_ROLES,
@@ -1941,14 +1705,11 @@ module.exports = {
   ROLE_FALLBACK_PROFILE,
   CLAUDE_FAMILY_PATTERN,
   CLAUDE_FAMILY_REASON,
-  STALL_REQUEST_FINISH_MS,
-  STALL_STRUCTURED_FAILURE_MS,
   PROFILE_SCHEMA,
   validateTaskProfile,
   jevQuestion,
   controllerFallbackProfile,
   assessTask,
-  claudeFamilyExclusion,
   failureDomainFromCandidateKey,
   canonicalFailureDomain,
   failureDomainOf,
@@ -1962,7 +1723,6 @@ module.exports = {
   findIndependentReviewerCandidate,
   jevModelChoiceQuestion,
   adviseModelChoice,
-  adviseRankedModelChoice,
   candidateKey,
   scoreForProfile,
   compareProfileScores,
@@ -1971,6 +1731,4 @@ module.exports = {
   resolveFloorQuality,
   costScoreOf,
   blendedCost,
-  stallAssessment,
-  reportDispatchOutcome,
 };
