@@ -58,7 +58,10 @@ test('WI-B1 P2 follow-up: buildMemberCandidate and buildAgyMemberCandidate apply
       headroom: 0.9,
       headroomStatus: 'open',
     },
-    { registry: reg }
+    {
+      modelFamilyOf: (id) =>
+        comboJev.modelFamilyOf(id, reg && reg.dispatch && reg.dispatch.modelStemAliases),
+    }
   );
   assert.ok(builtAgy.candidate);
   assert.equal(builtAgy.candidate.modelFamily, 'gpt');
