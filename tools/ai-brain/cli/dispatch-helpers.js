@@ -1,6 +1,5 @@
 'use strict';
 
-const path = require('path');
 const { currentBranch, headSha, commitExists } = require('../facts');
 const { toPositiveInteger } = require('../source-discovery');
 const { atomicRenameSync } = require('../atomic-rename');
@@ -25,14 +24,6 @@ function sameFailureDomain(candidate, failed, classification) {
           './failure-domain'
         );
   return failureDomain.sameFailureDomain(candidate, failed, classification);
-}
-
-// The ticket decides whether routes outside the combo may compete. Absent means they may.
-const ROUTE_SCOPES = new Set(['combo-only', 'combo-and-routes']);
-function routeScopeOf(value) {
-  if (value === undefined || value === null) return 'combo-and-routes';
-  if (!ROUTE_SCOPES.has(value)) throw new Error('ROUTE_SCOPE_INVALID: ' + value);
-  return value;
 }
 
 /**
@@ -203,55 +194,10 @@ function buildDryRunLog(parts) {
   };
 }
 
-/**
- * Resolve offline fixture paths from args, deps and env once. Callers pass
- * CLI args + injected deps and get back { fixtureDir, opencodeModelsFixture,
- * comboFixture, hasOfflineFixture }. Keeps the env-var names (SHIPDE_*) as
- * the canonical overrides; the three CLI aliases collapse to one lookup each.
- */
-function resolveFixturePaths(args, deps) {
-  const fsMod = (deps && deps.fs) || require('fs');
-  const env = (deps && deps.env) || process.env;
-  const fixtureDir =
-    args['fixture-dir'] || args.fixtureDir || (deps && deps.fixtureDir) || env.SHIPDE_FIXTURE_DIR;
-
-  let dirModelsFixture;
-  if (fixtureDir) {
-    const txtPath = path.join(fixtureDir, 'opencode-models.txt');
-    const jsonPath = path.join(fixtureDir, 'opencode-models.json');
-    if (fsMod.existsSync(txtPath)) {
-      dirModelsFixture = txtPath;
-    } else if (fsMod.existsSync(jsonPath)) {
-      dirModelsFixture = jsonPath;
-    }
-  }
-
-  const opencodeModelsFixture =
-    args['opencode-models-fixture'] ||
-    args.opencodeModelsFixture ||
-    (deps && (deps.opencodeModelsFixture || deps.modelsFixture)) ||
-    (deps && deps.env && deps.env.SHIPDE_OPENCODE_MODELS_FIXTURE) ||
-    env.SHIPDE_OPENCODE_MODELS_FIXTURE ||
-    dirModelsFixture;
-
-  const dirComboFixture = fixtureDir ? path.join(fixtureDir, 'combos.json') : undefined;
-  const comboFixture =
-    args['combo-fixture'] ||
-    args.comboFixture ||
-    (deps && deps.comboFixture) ||
-    (deps && deps.env && deps.env.SHIPDE_COMBO_FIXTURE) ||
-    env.SHIPDE_COMBO_FIXTURE ||
-    dirComboFixture;
-
-  const hasOfflineFixture = Boolean(fixtureDir || comboFixture || opencodeModelsFixture);
-  return { fixtureDir, opencodeModelsFixture, comboFixture, hasOfflineFixture };
-}
-
 module.exports = {
   DRY_RUN_BLOCK_CODES,
   LIVE_BLOCK_CODES,
   mergeEvidenceAccounts,
-  routeScopeOf,
   assembleForDispatch,
   readCheckpoint,
   writeJsonFile,
@@ -261,5 +207,4 @@ module.exports = {
   applyFailureBlocks,
   applyDryRunBlocks,
   buildDryRunLog,
-  resolveFixturePaths,
 };

@@ -33,8 +33,6 @@ const jev = require('./jev');
 const evidence = require('./evidence');
 const decisions = require('./decisions');
 const ranking = require('./ranking');
-const quotaStore = require('./quota-store');
-const candidatesApi = require('./candidates');
 const { loadPriors, priorFor } = require('./priors');
 const {
   candidateKey,
@@ -132,9 +130,6 @@ const UNKNOWN_EVIDENCE_PENALTY = 15;
 /** Evidence older than 30 days loses trust linearly, up to this penalty. */
 const EVIDENCE_AGE_PENALTY_MAX = 15;
 const EVIDENCE_AGE_TRUST_MS = 30 * 24 * 60 * 60 * 1000;
-
-/** How many rejection reasons are recorded verbatim; the rest are counted. */
-const REJECTED_RECORDED_LIMIT = 50;
 
 const PROFILE_SCHEMA = Object.freeze([
   {
@@ -674,16 +669,6 @@ function isForbiddenCandidate(candidate, forbiddenFailureDomains) {
     }
   }
   return false;
-}
-
-function hasQuotaAccountReadings(home, storePath) {
-  try {
-    const file = quotaStore.storePath({ home, path: storePath });
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return Boolean(parsed && parsed.accounts && Object.keys(parsed.accounts).length > 0);
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -1866,70 +1851,6 @@ async function adviseRankedModelChoice(result, profile, options) {
   return Object.assign({}, result, { chosen: advice.chosen, modelChoice: advice.advice });
 }
 
-/** One line of the top-3 output the operator reads. */
-function formatTopEntry(entry, rank) {
-  const measuredLatency =
-    Array.isArray(entry.evidence) &&
-    entry.evidence.find((item) => item && Number.isFinite(Number(item.latencyMs)));
-  const duration =
-    entry.expectedDurationMs ?? entry.latencyMs ?? (measuredLatency && measuredLatency.latencyMs);
-  const durationText =
-    duration !== null && duration !== undefined && Number.isFinite(Number(duration))
-      ? Number(duration) + 'ms'
-      : 'unknown';
-  const cost = blendedCost(entry);
-  return (
-    '  ' +
-    rank +
-    '. ' +
-    entry.candidateKey +
-    ' | ' +
-    durationText +
-    ' | cost ' +
-    (cost === null ? 'unknown' : cost) +
-    ' | proof ' +
-    (rankProofOf(entry) || 'unproven') +
-    ' | quota ' +
-    (entry.headroomStatus || 'unknown') +
-    ' | failure-domain ' +
-    failureDomainOf(entry) +
-    ' | score ' +
-    entry.score +
-    (entry.reservationsHeld ? ' (busy: ' + entry.reservationsHeld + ' held)' : '')
-  );
-}
-
-function jsonRejectedSlice(result, profile) {
-  const requiredHarness = profile && profile.requiredHarness;
-  const picked = [];
-  const seen = new Set();
-  const add = (item) => {
-    if (!item || seen.has(item.candidateKey)) return;
-    seen.add(item.candidateKey);
-    picked.push(item);
-  };
-
-  for (const r of result.rejected || []) {
-    if (
-      (requiredHarness && String(r.candidateKey || '').startsWith(requiredHarness + '::')) ||
-      r.reasonCode === 'QUOTA_EXHAUSTED' ||
-      r.reasonCode === 'COOLDOWN_ACTIVE'
-    ) {
-      add(r);
-    }
-  }
-  for (const r of result.rejected || []) {
-    if (picked.length >= REJECTED_RECORDED_LIMIT) break;
-    add(r);
-  }
-  return picked.slice(0, REJECTED_RECORDED_LIMIT);
-}
-
-function rankProofOf(entry) {
-  const items = (entry && entry.evidence) || [];
-  return evidence.proofLevelOf(items.filter((e) => e.status === 'passed'));
-}
-
 /**
  * Stall assessment for a reported outcome, using the two contract thresholds.
  * `requestFinishStalled` marks a request that should have finished; a failed
@@ -2134,42 +2055,6 @@ function reportDispatchOutcome(args, deps) {
   return { exitCode: 0, failed, stall, recorded };
 }
 
-async function defaultLauncher(request, opts) {
-  // Internal seam for tests (like deps.gitRoot); production uses the registry.
-  const getHarness =
-    opts && typeof opts.getHarness === 'function'
-      ? opts.getHarness
-      : require('./harness').getHarness;
-  const adapter = getHarness(request.harness);
-  if (!adapter) {
-    throw new Error('UNKNOWN_HARNESS: ' + request.harness);
-  }
-  const job = {
-    candidateKey: request.candidateKey,
-    harness: request.harness,
-    accessPath: request.accessPath,
-    gateway: request.gateway,
-    upstream: request.upstream,
-    account: request.account,
-    accountId: request.account,
-    modelId: request.modelId,
-    model: request.modelId,
-    reservationId: request.reservationId,
-    // TASK-AI-171 R2 (E2): the validated execute target, never a recomputed one.
-    cwd: request.cwd,
-    base: request.baseSha,
-    baseSha: request.baseSha,
-  };
-  const launchArgs = adapter.launch(job);
-  if (launchArgs && !Array.isArray(launchArgs) && (launchArgs.refusal || launchArgs.error)) {
-    return {
-      status: 'failed',
-      reason: launchArgs.reason || launchArgs.refusal || launchArgs.error,
-    };
-  }
-  return { status: 'completed', launchArgs };
-}
-
 module.exports = {
   reliabilityScoreOf,
   TASK_ROLES,
@@ -2202,7 +2087,6 @@ module.exports = {
   adviseModelChoice,
   adviseRankedModelChoice,
   candidateKey,
-  formatTopEntry,
   scoreForProfile,
   compareProfileScores,
   latencyScoreOf,
