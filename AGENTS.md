@@ -15,6 +15,10 @@ Existing code is implementation evidence, not business authority. If code and sp
 
 ## One Work Item per branch and Pull Request
 
+The contract gate picks the route from the actual diff and the policy at the protected base (`docs/product-spec/scripts/pr_contract_policy.json`). The title, body or labels never lower the route. Every Pull Request still needs required CI and an independent review of the exact head.
+
+- **Maintenance route.** Every changed path must be inside the policy's maintenance scope: docs outside the product specification, `.evidence`, AI-brain tests, and deletion of `MERGED`/`SUPERSEDED` Work Items with only their register `work_item_path` cleared. Title the PR `chore:`, `docs:` or `refactor:`. Give `## Goal`, `## Scope` and `## Verification` in the body. Do not create a Work Item file or register row.
+- **Work Item route.** This applies to anything else: product behavior, `apps/`, `packages/`, Prisma, OpenAPI/contracts, auth, tenant, money, workflows, gates and unknown paths. Use the rules below.
 - One branch and one Pull Request contain exactly one `FEAT-*`, `TASK-FOUND-*`, `TASK-AI-*` or Controller goal item `GOAL-<GOAL>-<n>` Work Item.
 - Branch: `feat/<lowercase-work-item-id>-<short-slug>` or `fix/<lowercase-work-item-id>-<short-slug>`.
 - Pull Request title: `[<WORK_ITEM_ID>] <business outcome>`.

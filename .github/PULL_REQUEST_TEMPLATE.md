@@ -1,3 +1,5 @@
+<!-- Maintenance PR (every changed path inside docs/product-spec/scripts/pr_contract_policy.json maintenance scope at the base): title it chore:/docs:/refactor:, replace this template with ## Goal, ## Scope, ## Verification and Review status: READY_FOR_CODEX, and add no Work Item file or register row. Everything else uses the Work Item template below. -->
+
 ## Work Item
 
 - Work Item ID: <FEAT-ID, TASK-FOUND-ID or TASK-AI-ID>
