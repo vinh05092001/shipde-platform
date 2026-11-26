@@ -17,13 +17,19 @@ const python = ['python', 'python3'].find(
   (cmd) => spawnSync(cmd, ['--version'], { encoding: 'utf8' }).status === 0
 );
 
+const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).stdout.trim();
+
 function titleErrors(title) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'goal-contract-'));
   try {
     const event = path.join(dir, 'event.json');
     fs.writeFileSync(
       event,
-      JSON.stringify({ pull_request: { title, body: '', base: { ref: 'main' } } })
+      // Pin base and head to the same commit: an empty diff always takes the Work Item
+      // route, so the title rule is tested independently of the checkout's own changes.
+      JSON.stringify({
+        pull_request: { title, body: '', base: { ref: 'main', sha: head }, head: { sha: head } },
+      })
     );
     const res = spawnSync(python, [script, '--event', event], { cwd: repo, encoding: 'utf8' });
     return (res.stdout + res.stderr)
