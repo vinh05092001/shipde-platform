@@ -233,7 +233,7 @@ After squash-merging the passing PR, run:
 powershell -ExecutionPolicy Bypass -File .\scripts\ai\control.ps1 -Action Sync
 ```
 
-This parks and fast-forwards every clean worktree. Then choose **Continue pipeline** again to prepare the next dependency-ready Work Item. The lower-level `start-work-item.ps1` and `review-pr.ps1` remain recovery tools, not the normal operating path.
+This parks and fast-forwards every clean worktree. Then choose **Continue pipeline** again to prepare the next dependency-ready Work Item. The lower-level `start-work-item.ps1` remains a recovery tool, not the normal operating path; PR review runs through the Controller review path.
 
 ## Daily control rules
 

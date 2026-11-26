@@ -151,26 +151,6 @@ const NINEROUTER_MODELS = [
 
 const ACCOUNTS = [
   {
-    id: 'agy-docker-b',
-    provider: 'antigravity',
-    tier: 0,
-    access: 'included-in-paid-plan',
-    // How to reach it, recorded so the executor does not have to rediscover
-    // that the default CMD opens a TUI and exits 255 without a terminal.
-    launch: {
-      kind: 'docker-compose',
-      dir: 'scripts/ai/docker-worker',
-      service: 'gemini-worker',
-      command:
-        'docker compose run --rm --no-TTY gemini-worker agy --print-timeout 120s --print <prompt> --output-format text --model <model>',
-      note: 'OAuth account B, isolated in the gemini_worker_data volume',
-    },
-    capabilities: { jsonSchema: true, tools: true, contextWindow: 1000000 },
-    cost: { inputPerMillion: 0, outputPerMillion: 0 },
-    limits: {},
-    models: ANTIGRAVITY_MODELS,
-  },
-  {
     id: 'agy-native-a',
     provider: 'antigravity',
     tier: 1,
