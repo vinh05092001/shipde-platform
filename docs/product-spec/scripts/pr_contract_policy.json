@@ -5,8 +5,8 @@
   "maintenance_body_headings": ["## Goal", "## Scope", "## Verification"],
   "maintenance_paths": ["docs/**", "*.md", ".evidence/**", "tools/ai-brain/test/**"],
   "protected_paths": [
-    "AGENTS.md",
-    "CLAUDE.md",
+    "**/AGENTS.md",
+    "**/CLAUDE.md",
     ".github/**",
     "apps/**",
     "packages/**",

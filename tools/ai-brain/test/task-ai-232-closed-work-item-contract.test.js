@@ -135,7 +135,7 @@ scenario('AC3: maintenance evidence sections are required', (r) => {
     'Some text\nReview status: READY_FOR_CODEX'
   );
   assert.equal(res.status, 1);
-  assert.match(res.out, /missing maintenance PR section: ## Goal/);
+  assert.match(res.out, /missing or empty maintenance PR section: ## Goal/);
 });
 
 scenario('AC4: deleting terminal Work Items and clearing exactly their paths passes', (r) => {
@@ -274,6 +274,113 @@ scenario('Tier B: two Work Items in one PR still fail', (r) => {
   const res = r.run('[TASK-AI-3] Change two', WORK_ITEM_BODY('TASK-AI-3'));
   assert.equal(res.status, 1);
   assert.match(res.out, /multiple Work Items changed/);
+});
+
+scenario('AC3: empty maintenance sections fail', (r) => {
+  r.write('docs/notes.md', 'new note\n');
+  const body = '## Goal\n\n## Scope\n\n## Verification\n\nReview status: READY_FOR_CODEX\n';
+  const res = r.run('docs: refresh notes', body);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /missing or empty maintenance PR section: ## Goal/);
+});
+
+scenario('AC3: headings only mentioned in prose or code do not count', (r) => {
+  r.write('docs/notes.md', 'new note\n');
+  const body =
+    'This PR has a ## Goal, ## Scope and ## Verification.\n\n```\n## Goal\nfake\n## Scope\nfake\n## Verification\nfake\n```\n\nReview status: READY_FOR_CODEX\n';
+  const res = r.run('docs: refresh notes', body);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /missing or empty maintenance PR section: ## Goal/);
+});
+
+const registerWith = (r, transform) => {
+  const file = path.join(r.dir, REGISTER);
+  fs.writeFileSync(file, transform(fs.readFileSync(file, 'utf8')));
+};
+
+scenario('AC4: an extra register column on a cleaned row fails closed', (r) => {
+  r.remove('docs/product-spec/work-items/TASK-AI-1.md');
+  r.clearPaths(['TASK-AI-1']);
+  registerWith(r, (t) => t.replace('"10","","a1"', '"10","","a1","extra"'));
+  const res = r.run('chore: delete shipped Work Item', MAINTENANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /head register record 2 has 15 fields, header has 14/);
+});
+
+scenario('AC4: a missing register column fails closed', (r) => {
+  r.remove('docs/product-spec/work-items/TASK-AI-1.md');
+  r.clearPaths(['TASK-AI-1']);
+  registerWith(r, (t) => t.replace('"10","","a1"', '"10",""'));
+  const res = r.run('chore: delete shipped Work Item', MAINTENANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /head register record 2 has 13 fields/);
+});
+
+scenario('AC4: a duplicate register header fails closed', (r) => {
+  r.remove('docs/product-spec/work-items/TASK-AI-1.md');
+  r.clearPaths(['TASK-AI-1']);
+  registerWith(r, (t) => t.replace('"merge_commit"', '"status"'));
+  const res = r.run('chore: delete shipped Work Item', MAINTENANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /head register header has empty or duplicate columns/);
+});
+
+test('AC5: renaming a tracked .env away is refused on the source side', { skip: !python }, () => {
+  const r = makeRepo();
+  try {
+    // Seed a tracked docs/.env on the base side, then rename it in the PR.
+    r.g('checkout', '-q', 'main');
+    r.write('docs/.env', 'X=1\n');
+    r.g('add', '-A');
+    r.g('commit', '-qm', 'seed env');
+    const base = r.g('rev-parse', 'HEAD');
+    r.g('checkout', '-q', '-B', 'pr2', base);
+    r.g('mv', 'docs/.env', 'docs/env-notes.txt');
+    r.g('commit', '-qm', 'rename env');
+    const head = r.g('rev-parse', 'HEAD');
+    const event = path.join(r.dir, 'event2.json');
+    fs.writeFileSync(
+      event,
+      JSON.stringify({
+        pull_request: {
+          title: 'docs: rename env',
+          body: MAINTENANCE_BODY,
+          base: { ref: 'main', sha: base },
+          head: { sha: head },
+        },
+      })
+    );
+    const res = spawnSync(python, [path.join(r.dir, VALIDATOR), '--event', event], {
+      cwd: r.dir,
+      encoding: 'utf8',
+    });
+    assert.equal(res.status, 1, res.stdout);
+    assert.match(res.stdout, /tracked \.env file is prohibited/);
+  } finally {
+    r.cleanup();
+  }
+});
+
+scenario('AC1: a type change (file to symlink) is Tier B', (r) => {
+  const link = spawnSync('git', ['hash-object', '-w', '--stdin'], {
+    cwd: r.dir,
+    input: 'other.md',
+    encoding: 'utf8',
+  }).stdout.trim();
+  r.g('update-index', '--cacheinfo', `120000,${link},docs/notes.md`);
+  r.g('commit', '-qm', 'symlink');
+  // Make the work tree agree with the committed symlink so run() stages nothing new.
+  r.g('-c', 'core.symlinks=false', 'checkout', '--', 'docs/notes.md');
+  const res = r.run('docs: link notes', MAINTENANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: type change: docs\/notes.md/);
+});
+
+scenario('AC2: a nested AGENTS.md is protected', (r) => {
+  r.write('docs/product-spec/AGENTS.md', '# contract\n');
+  const res = r.run('docs: edit contract', MAINTENANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: docs\/product-spec\/AGENTS.md/);
 });
 
 test('AC5: without a base policy every PR is Tier B (bootstrap)', { skip: !python }, () => {

@@ -157,10 +157,56 @@ def load_policy(base_rev: str) -> dict | None:
     return policy
 
 
-def read_register(text: str) -> tuple[list[str], list[dict[str, str]]]:
-    reader = csv.DictReader(io.StringIO(text, newline=""))
-    rows = list(reader)
-    return list(reader.fieldnames or []), rows
+REGISTER_REQUIRED_COLUMNS = ("delivery_order", "work_item_id", "status", "work_item_path")
+
+
+def read_register(text: str, side: str) -> tuple[list[str], list[dict[str, str]]]:
+    """Strict CSV: unique non-empty header with the required columns, every row the header's width."""
+    try:
+        records = list(csv.reader(io.StringIO(text, newline=""), strict=True))
+    except csv.Error as exc:
+        raise ContractInputError(f"{side} register is not valid CSV: {exc}") from exc
+    if not records:
+        raise ContractInputError(f"{side} register is empty")
+    header = records[0]
+    if any(not name for name in header) or len(set(header)) != len(header):
+        raise ContractInputError(f"{side} register header has empty or duplicate columns")
+    missing = [name for name in REGISTER_REQUIRED_COLUMNS if name not in header]
+    if missing:
+        raise ContractInputError(f"{side} register header lacks {missing}")
+    rows: list[dict[str, str]] = []
+    for number, record in enumerate(records[1:], start=2):
+        if not record:
+            continue
+        if len(record) != len(header):
+            raise ContractInputError(
+                f"{side} register record {number} has {len(record)} fields, header has {len(header)}"
+            )
+        rows.append(dict(zip(header, record)))
+    return header, rows
+
+
+def section_has_content(body: str, heading: str) -> bool:
+    """True when `heading` is a real Markdown heading line outside code fences with non-empty text under it."""
+    in_fence = False
+    collecting = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            if collecting:
+                return True
+            continue
+        if in_fence:
+            continue
+        if re.match(r"^#{1,6}\s", stripped):
+            if collecting:
+                return False
+            collecting = stripped == heading
+            continue
+        if collecting and stripped:
+            return True
+    return False
 
 
 def classify(entries, policy) -> tuple[str, str]:
@@ -174,6 +220,8 @@ def classify(entries, policy) -> tuple[str, str]:
     work_item_dir = policy["work_item_dir"]
     register = policy["register_path"]
     for kind, paths in entries:
+        if kind == "T":
+            return "B", f"type change: {paths[0]}"
         for path in paths:
             if path == register:
                 if kind != "M":
@@ -199,10 +247,12 @@ def common_checks(body: str, entries) -> list[str]:
     if "- [ ]" in body:
         errors.append("PR contains unchecked mandatory checklist items")
     for kind, paths in entries:
+        # A pure deletion may remove a tracked .env; every other record is checked on both sides.
         if kind == "D":
             continue
-        if any(Path(p).name == ".env" for p in paths[-1:]):
+        if any(Path(p).name == ".env" for p in paths):
             errors.append("tracked .env file is prohibited; use .env.example with safe placeholders")
+            break
     return errors
 
 
@@ -213,8 +263,8 @@ def tier_a_checks(title, body, entries, policy, base_rev, head_rev) -> list[str]
     if WORK_ITEM_PATTERN.search(title):
         errors.append("maintenance PR title must not name a Work Item; use the Work Item contract instead")
     for heading in policy["maintenance_body_headings"]:
-        if heading not in body:
-            errors.append(f"missing maintenance PR section: {heading}")
+        if not section_has_content(body, heading):
+            errors.append(f"missing or empty maintenance PR section: {heading}")
     if "Review status: READY_FOR_CODEX" not in body:
         errors.append("PR is not marked READY_FOR_CODEX")
 
@@ -231,8 +281,8 @@ def tier_a_checks(title, body, entries, policy, base_rev, head_rev) -> list[str]
     head_text = show_at(head_rev, register)
     if head_text is None:
         raise ContractInputError("head register is unreadable")
-    base_fields, base_rows = read_register(base_text)
-    head_fields, head_rows = read_register(head_text)
+    base_fields, base_rows = read_register(base_text, "base")
+    head_fields, head_rows = read_register(head_text, "head")
     if base_fields != head_fields or len(base_rows) != len(head_rows):
         errors.append("register header or row count changed in a maintenance PR")
         return errors
