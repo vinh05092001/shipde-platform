@@ -11,10 +11,10 @@
 | Dependencies | Registered: `TASK-FOUND-04` plus BACKLOG-DEPENDENCIES.md. Available integration prerequisites: `FEAT-AUTH-01`, `FEAT-AUTH-06`, `FEAT-RBAC-01`, `FEAT-RBAC-02`, `FEAT-PRO-01`. Domain producer dependency scope is resolved by D1 (bounded S01 first delivery; the remaining producer categories ship as versioned fixture-only event contracts). |
 | Assigned author | `GEMINI` |
 | Risk | HIGH — tenant/recipient isolation, security notices, financial information in email, durable asynchronous delivery |
-| Allowed paths | Planning phase (this PR): this file, the FEAT-COM-09 row in `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`, and the FEAT-COM-09 row in `docs/product-spec/docs/00-control/TRACEABILITY.md`. Implementation phase: frozen allowed paths in [Allowed paths (frozen)](#allowed-paths-frozen). |
+| Allowed paths | `apps/api/src/notifications/**`; `apps/api/src/app.module.ts`; `apps/api/src/users/me.controller.ts`; `apps/api/src/users/me.dto.ts`; `apps/api/src/users/me.service.ts`; `apps/api/src/outbox/outbox.service.ts`; `apps/api/src/invitations/invitations.service.ts`; `apps/api/src/invitations/invitations.supertest.spec.ts`; `apps/api/src/invitations/invitations.unit.spec.ts`; `apps/api/src/auth/auth.service.ts`; `apps/api/src/auth/auth.login.supertest.spec.ts`; `apps/api/src/auth/auth.supertest.spec.ts`; `apps/worker/src/notifications/**`; `apps/worker/src/app.module.ts`; `apps/worker/src/dispatcher/outbox.dispatcher.ts`; `apps/web/src/app/settings/notifications/page.tsx`; `apps/web/src/app/admin/jobs/notification-deliveries/page.tsx`; `apps/web/src/components/notifications/**`; `apps/web/src/components/ProfileSettingsTab.tsx`; `apps/web/src/components/NotificationMatrixTab.tsx`; `apps/web/src/components/SettingsWorkspace.tsx`; `apps/web/src/components/ShopSettingsModal.tsx`; `apps/web/src/tests/**`; `apps/web/e2e/**`; `prisma/schema.prisma`; `prisma/migrations/**`; `docs/product-spec/contracts/openapi.yaml`; `packages/contracts/src/**`; `packages/config/src/**`; `packages/testkit/src/**`; `apps/api/package.json`; `apps/web/package.json`; `apps/worker/package.json`; `packages/contracts/package.json`; `packages/config/package.json`; `packages/testkit/package.json`; `docs/product-spec/work-items/FEAT-COM-09.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/00-control/TRACEABILITY.md` |
 | Reviewer | Codex — fresh independent task |
-| Branch | `feat/feat-com-09` — existing isolated branch; planning finalisation in this PR, one implementation PR to follow |
-| Pull Request | Planning finalisation PR on `feat/feat-com-09` (documentation only, this commit). The single implementation PR for this Work Item follows on the same branch after `IN_PROGRESS`. |
+| Branch | `feat/feat-com-09` — create from the current integration base after the writer is selected |
+| Pull Request | Open one implementation PR after the branch is created. |
 | Inspected baseline | Local HEAD and local `origin/main`: `b52f3af7c579be6e5fbbfcd339a4e54d8d0c4d48`; inspected 2026-10-30. No remote refresh or CI verification claimed. |
 
 ## Business outcome
@@ -197,6 +197,8 @@ Future live producer ownership is frozen below. GEMINI does not implement those 
 
 ## Author boundary
 
+Check the implementation diff against its recorded base with `git diff --name-status <base>...HEAD -- prisma/migrations apps/web/src/tests apps/web/e2e`. Migration changes must all be additions under exactly one new migration directory. Web test changes must all be new specs for this item. Changes to allowed package manifests are limited to `scripts`.
+
 GEMINI is required because this feature crosses frontend, API, database migrations, tenant/RBAC controls and asynchronous external delivery. 9ROUTER is not eligible. G1–G6 are settled as D1–D6 (Operator approval 2026-10-31); GEMINI may choose routine implementation details only within the approved contracts below.
 
 The implementation allowed paths are frozen in [Allowed paths (frozen)](#allowed-paths-frozen). The integration boundary is:
@@ -318,7 +320,21 @@ Fixtures must use synthetic identifiers, separate tenants and recipients, allowe
 
 ## Verification commands
 
-For this planning change: run `python docs/product-spec/scripts/validate_docs.py`, `git diff --check`, and the no-hardcode guard below. Check that only this Work Item and the single register row changed, links/headings resolve and no template placeholders remain. Application tests are not claimed for a documentation-only plan.
+- `pnpm db:generate`
+- `pnpm lint`
+- `pnpm format:check`
+- `pnpm typecheck`
+- `pnpm contract:check`
+- `pnpm test`
+- `pnpm test:integration`
+- `pnpm test:e2e`
+- `pnpm security:secrets`
+- `pnpm build`
+- `node scripts/ai/check-no-hardcode.mjs`
+
+### Planning evidence (historical)
+
+For the planning change: run `python docs/product-spec/scripts/validate_docs.py`, `git diff --check`, and the no-hardcode guard below. Check that only this Work Item and the single register row changed, links/headings resolve and no template placeholders remain. Application tests are not claimed for a documentation-only plan.
 
 Planning verification on 2026-10-30: documentation validator PASS (225 Markdown files, 130 feature IDs, 263 delivery rows); `git diff --check` PASS; no-hardcode guard PASS with 0 files in its controller-only diff scope (not a notification implementation check). A focused structural check passed for 34 source-link file targets, absence of template tokens, exactly one changed CSV row and consistent BLOCKED/GEMINI assignment. Existing untracked `.serena/.gitignore` was present before planning and remains untouched. Application tests, runtime email delivery and remote CI were not run.
 
@@ -328,7 +344,9 @@ Review response verification on 2026-11-01: no-hardcode guard PASS (`node script
 
 Review response verification on 2026-11-02 (addresses review.txt findings 2 and 3): `git diff --check origin/main...HEAD` PASS (no whitespace errors). Scope verification using three-dot diff: `git diff origin/main...HEAD --name-only` lists exactly four files (`docs/product-spec/work-items/FEAT-COM-09.md`, `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`, `docs/product-spec/docs/00-control/TRACEABILITY.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`), all inside the planning allowed-paths at line 14. Register single-row evidence: `git diff origin/main...HEAD -- docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` shows one hunk modifying row 28 only (`FEAT-COM-09`, `BACKLOG` → `READY_FOR_AUTHOR`); TASK-AI-64 and TASK-AI-65 are `MERGED` identically in both `origin/main` and `HEAD` (verified by `Select-String` on both revisions). Out-of-scope file verification: `git diff origin/main...HEAD -- .github/` and `git diff origin/main...HEAD -- .gitleaksignore` both produce empty output — these files are not modified by this branch. The prior reviewer's observations of unrelated mutations and out-of-scope `.github/`/`.gitleaksignore` changes were caused by viewing a two-dot (`main..HEAD`) delta that included merge-inherited content from `origin/main`; the three-dot diff, which shows only this branch's changes relative to the merge base, is clean.
 
-For implementation after unblocking, use Node 24 and repository-pinned pnpm 11 from a clean isolated checkout with documented test configuration. Run the production-install regression in a separate clean checkout before the development install. Do not read/print credential files or reset a shared/live database.
+### Full implementation verification
+
+For implementation, use Node 24 and repository-pinned pnpm 11 from a clean isolated checkout with documented test configuration. Run the production-install regression in a separate clean checkout before the development install. Do not read/print credential files or reset a shared/live database.
 
 ```text
 pnpm install --prod --frozen-lockfile
