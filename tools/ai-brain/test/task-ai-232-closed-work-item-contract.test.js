@@ -284,6 +284,32 @@ scenario('AC3: empty maintenance sections fail', (r) => {
   assert.match(res.out, /missing or empty maintenance PR section: ## Goal/);
 });
 
+scenario('AC3: a Verification section holding only the review marker fails', (r) => {
+  r.write('docs/notes.md', 'new note\n');
+  const body =
+    '## Goal\nRefresh notes.\n\n## Scope\nOne doc.\n\n## Verification\nReview status: READY_FOR_CODEX\n';
+  const res = r.run('docs: refresh notes', body);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /missing or empty maintenance PR section: ## Verification/);
+});
+
+scenario('AC3: a Verification section holding only an empty code block fails', (r) => {
+  r.write('docs/notes.md', 'new note\n');
+  const body =
+    '## Goal\nRefresh notes.\n\n## Scope\nOne doc.\n\n## Verification\n```\n```\n\nReview status: READY_FOR_CODEX\n';
+  const res = r.run('docs: refresh notes', body);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /missing or empty maintenance PR section: ## Verification/);
+});
+
+scenario('AC3: verification evidence inside a code block counts', (r) => {
+  r.write('docs/notes.md', 'new note\n');
+  const body =
+    '## Goal\nRefresh notes.\n\n## Scope\nOne doc.\n\n## Verification\n```\npython docs/product-spec/scripts/validate_docs.py  # PASS\n```\n\nReview status: READY_FOR_CODEX\n';
+  const res = r.run('docs: refresh notes', body);
+  assert.equal(res.status, 0, res.out);
+});
+
 scenario('AC3: headings only mentioned in prose or code do not count', (r) => {
   r.write('docs/notes.md', 'new note\n');
   const body =

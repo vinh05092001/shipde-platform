@@ -186,25 +186,32 @@ def read_register(text: str, side: str) -> tuple[list[str], list[dict[str, str]]
     return header, rows
 
 
+REVIEW_MARKER_LINE = re.compile(r"^[-*]?\s*Review status:\s*\S+$")
+
+
 def section_has_content(body: str, heading: str) -> bool:
-    """True when `heading` is a real Markdown heading line outside code fences with non-empty text under it."""
+    """True when `heading` is a real Markdown heading line outside code fences with evidence under it.
+
+    Evidence is a non-blank line before the next heading: text outside a fence or a line inside a
+    fenced block. Fence markers alone and the review-status marker are not evidence.
+    """
     in_fence = False
     collecting = False
     for line in body.splitlines():
         stripped = line.strip()
         if stripped.startswith("```") or stripped.startswith("~~~"):
             in_fence = not in_fence
-            if collecting:
-                return True
             continue
         if in_fence:
+            if collecting and stripped:
+                return True
             continue
         if re.match(r"^#{1,6}\s", stripped):
             if collecting:
                 return False
             collecting = stripped == heading
             continue
-        if collecting and stripped:
+        if collecting and stripped and not REVIEW_MARKER_LINE.match(stripped):
             return True
     return False
 
