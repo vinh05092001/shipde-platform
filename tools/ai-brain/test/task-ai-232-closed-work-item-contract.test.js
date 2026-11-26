@@ -88,9 +88,8 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
     for (const id of ids) out = out.replace(`"docs/product-spec/work-items/${id}.md"`, '""');
     write(REGISTER, out);
   };
-  const run = (title, body) => {
-    g('add', '-A');
-    g('commit', '-qm', 'change', '--allow-empty');
+  // check() evaluates the already-committed HEAD; run() commits the work tree first.
+  const check = (title, body) => {
     const head = g('rev-parse', 'HEAD');
     const event = path.join(dir, 'event.json');
     fs.writeFileSync(
@@ -106,8 +105,13 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
     fs.rmSync(event);
     return { status: res.status, out: res.stdout + res.stderr };
   };
+  const run = (title, body) => {
+    g('add', '-A');
+    g('commit', '-qm', 'change', '--allow-empty');
+    return check(title, body);
+  };
   const cleanup = () => fs.rmSync(dir, { recursive: true, force: true });
-  return { dir, g, write, remove, clearPaths, run, cleanup };
+  return { dir, g, write, remove, clearPaths, run, check, cleanup };
 }
 
 function scenario(name, fn) {
@@ -404,9 +408,9 @@ scenario('AC1: a type change (file to symlink) is Tier B', (r) => {
   }).stdout.trim();
   r.g('update-index', '--cacheinfo', `120000,${link},docs/notes.md`);
   r.g('commit', '-qm', 'symlink');
-  // Make the work tree agree with the committed symlink so run() stages nothing new.
-  r.g('-c', 'core.symlinks=false', 'checkout', '--', 'docs/notes.md');
-  const res = r.run('docs: link notes', MAINTENANCE_BODY);
+  // Evaluate the committed symlink directly: staging the work tree again would undo it
+  // on platforms where core.symlinks differs (Linux CI vs Windows).
+  const res = r.check('docs: link notes', MAINTENANCE_BODY);
   assert.equal(res.status, 1);
   assert.match(res.out, /Tier B: type change: docs\/notes.md/);
 });
