@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-"""Validate that a Ship Dễ Pull Request is reviewable as one Work Item."""
+"""Validate a Ship Dễ Pull Request against its risk tier.
+
+Tier B (default): the PR carries exactly one Work Item, its register row and
+the full evidence contract. Tier A (maintenance): every changed path is inside
+the maintenance scope declared by the policy at the protected base commit; the
+PR carries its goal, scope and verification evidence and needs no Work Item
+file or register row. The tier is derived from the actual Git delta and the
+base policy only; the title, body and labels can never lower it.
+"""
 
 from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import re
 import subprocess
@@ -13,6 +22,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = ROOT.parent.parent
+POLICY_PATH = "docs/product-spec/scripts/pr_contract_policy.json"
 # GOAL-<GOAL>-<n> ids are the Work Items the Controller plans for a goal.
 WORK_ITEM_PATTERN = re.compile(
     r"\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+|TASK-AI-[0-9]+|GOAL-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]+)\b"
@@ -31,32 +42,287 @@ REQUIRED_HEADINGS = [
 ]
 
 
-def changed_files(base_ref: str) -> list[str]:
-    command = ["git", "diff", "--name-only", f"origin/{base_ref}...HEAD"]
+class ContractInputError(Exception):
+    """A required input is missing or unreadable; the gate fails closed."""
+
+
+def git(*args: str) -> str:
     result = subprocess.run(
-        command,
-        cwd=ROOT.parent.parent,
+        ["git", *args],
+        cwd=REPOSITORY_ROOT,
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     if result.returncode != 0:
-        return []
-    return [line for line in result.stdout.splitlines() if line]
+        raise ContractInputError(f"git {' '.join(args[:2])} failed: {result.stderr.strip()[:200]}")
+    return result.stdout
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--event", required=True)
-    args = parser.parse_args()
+def show_at(revision: str, path: str) -> str | None:
+    """Return a file's content at a revision, or None when the file is absent there."""
+    probe = subprocess.run(
+        ["git", "cat-file", "-e", f"{revision}:{path}"],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+    )
+    if probe.returncode != 0:
+        return None
+    return git("show", f"{revision}:{path}")
 
-    event = json.loads(Path(args.event).read_text(encoding="utf-8"))
-    pull_request = event.get("pull_request") or {}
-    title = pull_request.get("title") or ""
-    body = pull_request.get("body") or ""
-    base_ref = (pull_request.get("base") or {}).get("ref") or "main"
+
+def resolve_revisions(pull_request: dict) -> tuple[str, str]:
+    base = (pull_request.get("base") or {})
+    head = (pull_request.get("head") or {})
+    base_rev = base.get("sha") or f"origin/{base.get('ref') or 'main'}"
+    head_rev = head.get("sha") or "HEAD"
+    for revision in (base_rev, head_rev):
+        git("rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}")
+    return base_rev, head_rev
+
+
+def changed_entries(base_rev: str, head_rev: str) -> list[tuple[str, list[str]]]:
+    """NUL-delimited name/status records; rename and copy carry both paths."""
+    raw = git("diff", "--name-status", "-z", "-M", "-C", "--find-copies-harder", f"{base_rev}...{head_rev}")
+    tokens = raw.split("\0")
+    if tokens and tokens[-1] == "":
+        tokens.pop()
+    entries: list[tuple[str, list[str]]] = []
+    index = 0
+    while index < len(tokens):
+        status = tokens[index]
+        kind = status[:1]
+        if kind in ("R", "C"):
+            paths = tokens[index + 1 : index + 3]
+            index += 3
+        elif kind in ("A", "M", "D", "T"):
+            paths = tokens[index + 1 : index + 2]
+            index += 2
+        else:
+            raise ContractInputError(f"unrecognized Git diff status: {status!r}")
+        if len(paths) != (2 if kind in ("R", "C") else 1) or any(not p for p in paths):
+            raise ContractInputError("incomplete record in Git diff")
+        entries.append((kind, paths))
+    return entries
+
+
+def glob_to_regex(pattern: str) -> re.Pattern[str]:
+    out = ""
+    i = 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out += "(?:.*/)?"
+            i += 3
+        elif pattern.startswith("**", i):
+            out += ".*"
+            i += 2
+        elif pattern[i] == "*":
+            out += "[^/]*"
+            i += 1
+        elif pattern[i] == "?":
+            out += "[^/]"
+            i += 1
+        else:
+            out += re.escape(pattern[i])
+            i += 1
+    return re.compile(f"^{out}$")
+
+
+def matches(path: str, patterns: list[re.Pattern[str]]) -> bool:
+    return any(p.match(path) for p in patterns)
+
+
+def load_policy(base_rev: str) -> dict | None:
+    text = show_at(base_rev, POLICY_PATH)
+    if text is None:
+        return None
+    try:
+        policy = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ContractInputError(f"base policy is not valid JSON: {exc}") from exc
+    required = (
+        "maintenance_title_pattern",
+        "maintenance_body_headings",
+        "maintenance_paths",
+        "protected_paths",
+        "work_item_dir",
+        "register_path",
+        "terminal_statuses",
+    )
+    missing = [key for key in required if key not in policy]
+    if missing or policy.get("version") != 1:
+        raise ContractInputError(f"base policy is malformed (missing {missing or 'version 1'})")
+    return policy
+
+
+REGISTER_REQUIRED_COLUMNS = ("delivery_order", "work_item_id", "status", "work_item_path")
+
+
+def read_register(text: str, side: str) -> tuple[list[str], list[dict[str, str]]]:
+    """Strict CSV: unique non-empty header with the required columns, every row the header's width."""
+    try:
+        records = list(csv.reader(io.StringIO(text, newline=""), strict=True))
+    except csv.Error as exc:
+        raise ContractInputError(f"{side} register is not valid CSV: {exc}") from exc
+    if not records:
+        raise ContractInputError(f"{side} register is empty")
+    header = records[0]
+    if any(not name for name in header) or len(set(header)) != len(header):
+        raise ContractInputError(f"{side} register header has empty or duplicate columns")
+    missing = [name for name in REGISTER_REQUIRED_COLUMNS if name not in header]
+    if missing:
+        raise ContractInputError(f"{side} register header lacks {missing}")
+    rows: list[dict[str, str]] = []
+    for number, record in enumerate(records[1:], start=2):
+        if not record:
+            continue
+        if len(record) != len(header):
+            raise ContractInputError(
+                f"{side} register record {number} has {len(record)} fields, header has {len(header)}"
+            )
+        rows.append(dict(zip(header, record)))
+    return header, rows
+
+
+REVIEW_MARKER_LINE = re.compile(r"^[-*]?\s*Review status:\s*\S+$")
+
+
+def section_has_content(body: str, heading: str) -> bool:
+    """True when `heading` is a real Markdown heading line outside code fences with evidence under it.
+
+    Evidence is a non-blank line before the next heading: text outside a fence or a line inside a
+    fenced block. Fence markers alone and the review-status marker are not evidence.
+    """
+    in_fence = False
+    collecting = False
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if not in_fence and re.match(r"^#{1,6}\s", stripped):
+            if collecting:
+                return False
+            collecting = stripped == heading
+            continue
+        evidence = bool(stripped) and not REVIEW_MARKER_LINE.match(stripped)
+        if collecting and evidence:
+            return True
+    return False
+
+
+def classify(entries, policy) -> tuple[str, str]:
+    """Return ('A'|'B', reason). Anything not provably maintenance is Tier B."""
+    if policy is None:
+        return "B", "no contract policy at the base commit"
+    if not entries:
+        return "B", "empty diff"
+    maintenance = [glob_to_regex(p) for p in policy["maintenance_paths"]]
+    protected = [glob_to_regex(p) for p in policy["protected_paths"]]
+    work_item_dir = policy["work_item_dir"]
+    register = policy["register_path"]
+    for kind, paths in entries:
+        if kind == "T":
+            return "B", f"type change: {paths[0]}"
+        for path in paths:
+            if path == register:
+                if kind != "M":
+                    return "B", f"register change {kind}"
+                continue
+            if path.startswith(work_item_dir):
+                if kind != "D":
+                    return "B", f"Work Item file {kind}: {path}"
+                continue
+            if matches(path, protected):
+                return "B", f"protected path: {path}"
+            if not matches(path, maintenance):
+                return "B", f"path outside maintenance scope: {path}"
+    return "A", "every path is inside the maintenance scope"
+
+
+def common_checks(body: str, entries) -> list[str]:
     errors: list[str] = []
+    if re.search(r"<[^>\n]+>", body):
+        errors.append("PR body still contains required template placeholders")
+    if re.search(r"\b(?:TBD|TODO)\b", body):
+        errors.append("PR body contains TBD/TODO instead of evidence or an explicit blocker")
+    if "- [ ]" in body:
+        errors.append("PR contains unchecked mandatory checklist items")
+    for kind, paths in entries:
+        # A pure deletion may remove a tracked .env; every other record is checked on both sides.
+        if kind == "D":
+            continue
+        if any(Path(p).name == ".env" for p in paths):
+            errors.append("tracked .env file is prohibited; use .env.example with safe placeholders")
+            break
+    return errors
 
+
+def tier_a_checks(title, body, entries, policy, base_rev, head_rev) -> list[str]:
+    errors = common_checks(body, entries)
+    if not re.search(policy["maintenance_title_pattern"], title):
+        errors.append("maintenance PR title must start with chore:, docs: or refactor:")
+    if WORK_ITEM_PATTERN.search(title):
+        errors.append("maintenance PR title must not name a Work Item; use the Work Item contract instead")
+    for heading in policy["maintenance_body_headings"]:
+        if not section_has_content(body, heading):
+            errors.append(f"missing or empty maintenance PR section: {heading}")
+    if "Review status: READY_FOR_CODEX" not in body:
+        errors.append("PR is not marked READY_FOR_CODEX")
+
+    register = policy["register_path"]
+    work_item_dir = policy["work_item_dir"]
+    deleted = {paths[0] for kind, paths in entries if kind == "D" and paths[0].startswith(work_item_dir)}
+    register_changed = any(register in paths for _, paths in entries)
+    if not deleted and not register_changed:
+        return errors
+
+    base_text = show_at(base_rev, register)
+    if base_text is None:
+        raise ContractInputError("base register is unreadable")
+    head_text = show_at(head_rev, register)
+    if head_text is None:
+        raise ContractInputError("head register is unreadable")
+    base_fields, base_rows = read_register(base_text, "base")
+    head_fields, head_rows = read_register(head_text, "head")
+    if base_fields != head_fields or len(base_rows) != len(head_rows):
+        errors.append("register header or row count changed in a maintenance PR")
+        return errors
+
+    terminal = set(policy["terminal_statuses"])
+    by_path: dict[str, list[dict[str, str]]] = {}
+    for row in base_rows:
+        by_path.setdefault(row.get("work_item_path") or "", []).append(row)
+    for path in sorted(deleted):
+        owners = by_path.get(path, [])
+        if len(owners) != 1:
+            errors.append(f"deleted Work Item has no unique base register row: {path}")
+        elif owners[0].get("status") not in terminal:
+            errors.append(f"deleted Work Item is still active ({owners[0].get('status')}): {path}")
+
+    cleared: set[str] = set()
+    for before, after in zip(base_rows, head_rows):
+        if before == after:
+            continue
+        drift = [key for key in base_fields if key != "work_item_path" and before.get(key) != after.get(key)]
+        if drift:
+            errors.append(f"register row {before.get('work_item_id')} changed {drift}; only work_item_path may be cleared")
+            continue
+        if after.get("work_item_path"):
+            errors.append(f"register row {before.get('work_item_id')} path changed instead of cleared")
+            continue
+        cleared.add(before.get("work_item_path") or "")
+    for path in sorted(deleted - cleared):
+        errors.append(f"deleted Work Item still listed in register: {path}")
+    for path in sorted(cleared - deleted):
+        errors.append(f"register path cleared without deleting its file: {path}")
+    return errors
+
+
+def tier_b_checks(title, body, entries, head_rev) -> list[str]:
+    errors: list[str] = []
     title_ids = WORK_ITEM_PATTERN.findall(title)
     if len(title_ids) != 1:
         errors.append("PR title must contain exactly one FEAT-*, TASK-FOUND-*, TASK-AI-* or GOAL-*-N Work Item ID")
@@ -65,74 +331,78 @@ def main() -> int:
     for heading in REQUIRED_HEADINGS:
         if heading not in body:
             errors.append(f"missing PR section: {heading}")
-
     if work_item_id and work_item_id not in body:
         errors.append(f"PR body does not reference title Work Item {work_item_id}")
-
-    if re.search(r"<[^>\n]+>", body):
-        errors.append("PR body still contains required template placeholders")
-    if re.search(r"\b(?:TBD|TODO)\b", body):
-        errors.append("PR body contains TBD/TODO instead of evidence or an explicit blocker")
-    if "- [ ]" in body:
-        errors.append("PR contains unchecked mandatory checklist items")
+    errors.extend(common_checks(body, entries))
     if "Review status: READY_FOR_CODEX" not in body:
         errors.append("PR is not marked READY_FOR_CODEX")
 
-    files = changed_files(base_ref)
-    work_item_changes = [
-        path
-        for path in files
-        if re.search(r"docs/product-spec/work-items/(?:FEAT|TASK|GOAL)-", path)
-    ]
+    files = sorted({p for _, paths in entries for p in paths})
     distinct_changed_ids = {
         match.group(0)
-        for path in work_item_changes
+        for path in files
+        if re.search(r"docs/product-spec/work-items/(?:FEAT|TASK|GOAL)-", path)
         for match in [WORK_ITEM_PATTERN.search(path)]
         if match
     }
     if len(distinct_changed_ids) > 1:
         errors.append(f"multiple Work Items changed: {sorted(distinct_changed_ids)}")
-    if any(Path(path).name == ".env" for path in files):
-        errors.append("tracked .env file is prohibited; use .env.example with safe placeholders")
 
     if work_item_id:
         register = ROOT / "docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv"
         with register.open(encoding="utf-8", newline="") as handle:
             register_rows = list(csv.DictReader(handle))
-        matching_rows = [
-            row for row in register_rows if row.get("work_item_id") == work_item_id
-        ]
+        matching_rows = [row for row in register_rows if row.get("work_item_id") == work_item_id]
         if len(matching_rows) != 1:
-            errors.append(
-                f"Work Item must have exactly one feature-register row: {work_item_id}"
-            )
+            errors.append(f"Work Item must have exactly one feature-register row: {work_item_id}")
         else:
             registered_path = matching_rows[0].get("work_item_path") or ""
-            work_item = ROOT.parent.parent / registered_path
+            work_item = REPOSITORY_ROOT / registered_path
             if not registered_path or not work_item.is_file():
-                errors.append(
-                    f"registered Work Item file is missing: {registered_path or work_item_id}"
-                )
+                errors.append(f"registered Work Item file is missing: {registered_path or work_item_id}")
             if registered_path not in files:
-                errors.append(
-                    f"PR must update its registered Work Item file: {registered_path}"
-                )
-
+                errors.append(f"PR must update its registered Work Item file: {registered_path}")
         if distinct_changed_ids and distinct_changed_ids != {work_item_id}:
             errors.append(
                 "changed Work Item files do not match PR title: "
                 f"title={work_item_id} changed={sorted(distinct_changed_ids)}"
             )
+    return errors
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--event", required=True)
+    args = parser.parse_args()
+
+    try:
+        event = json.loads(Path(args.event).read_text(encoding="utf-8"))
+        pull_request = event.get("pull_request") or {}
+        title = pull_request.get("title") or ""
+        body = pull_request.get("body") or ""
+        base_rev, head_rev = resolve_revisions(pull_request)
+        entries = changed_entries(base_rev, head_rev)
+        policy = load_policy(base_rev)
+        tier, reason = classify(entries, policy)
+        if tier == "A":
+            errors = tier_a_checks(title, body, entries, policy, base_rev, head_rev)
+        else:
+            errors = tier_b_checks(title, body, entries, head_rev)
+    except (ContractInputError, OSError, ValueError) as exc:
+        print("Pull Request contract validation failed:")
+        print(f"- unreadable contract input: {exc}")
+        return 1
 
     if errors:
-        print("Pull Request contract validation failed:")
+        print(f"Pull Request contract validation failed (Tier {tier}: {reason}):")
         for error in errors:
             print(f"- {error}")
         return 1
 
+    label = "maintenance" if tier == "A" else (WORK_ITEM_PATTERN.findall(title) or [""])[0]
     print(
-        f"Pull Request contract passed for {work_item_id}; "
-        f"{len(files)} changed files inspected."
+        f"Pull Request contract passed for {label} (Tier {tier}); "
+        f"{len(entries)} changed files inspected."
     )
     return 0
 

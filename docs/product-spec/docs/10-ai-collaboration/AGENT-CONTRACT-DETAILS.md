@@ -140,7 +140,12 @@ Following `TASK-FOUND-02` monorepo migration, use the authoritative workspace ro
 
 ## Pull Request evidence
 
-Every Pull Request must contain:
+The contract gate (`docs/product-spec/scripts/validate_pr_contract.py`) takes the route from the Git diff and the policy at the protected base, never from the title or labels.
+
+- A maintenance Pull Request has every changed path inside the base policy's maintenance scope. It needs a `chore:`, `docs:` or `refactor:` title, `## Goal`, `## Scope` and `## Verification` sections and `Review status: READY_FOR_CODEX`. It needs no Work Item file or register row. Deleting a Work Item is maintenance only when its base register row is `MERGED` or `SUPERSEDED` and the PR clears exactly that row's `work_item_path`, leaving every other field unchanged.
+- Any other Pull Request follows the Work Item route below, including any PR with an unknown, protected or mixed path.
+
+A Work Item Pull Request must contain:
 
 - exactly one Work Item ID and Feature ID;
 - assigned implementation author and reviewed commit;
