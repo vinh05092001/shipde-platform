@@ -302,6 +302,15 @@ scenario('AC3: a Verification section holding only an empty code block fails', (
   assert.match(res.out, /missing or empty maintenance PR section: ## Verification/);
 });
 
+scenario('AC3: a fenced block holding only the review marker is not evidence', (r) => {
+  r.write('docs/notes.md', 'new note\n');
+  const body =
+    '## Goal\nRefresh notes.\n\n## Scope\nOne doc.\n\n## Verification\n```\nReview status: READY_FOR_CODEX\n```\n\nReview status: READY_FOR_CODEX\n';
+  const res = r.run('docs: refresh notes', body);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /missing or empty maintenance PR section: ## Verification/);
+});
+
 scenario('AC3: verification evidence inside a code block counts', (r) => {
   r.write('docs/notes.md', 'new note\n');
   const body =

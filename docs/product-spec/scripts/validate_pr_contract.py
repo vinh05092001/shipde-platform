@@ -202,16 +202,13 @@ def section_has_content(body: str, heading: str) -> bool:
         if stripped.startswith("```") or stripped.startswith("~~~"):
             in_fence = not in_fence
             continue
-        if in_fence:
-            if collecting and stripped:
-                return True
-            continue
-        if re.match(r"^#{1,6}\s", stripped):
+        if not in_fence and re.match(r"^#{1,6}\s", stripped):
             if collecting:
                 return False
             collecting = stripped == heading
             continue
-        if collecting and stripped and not REVIEW_MARKER_LINE.match(stripped):
+        evidence = bool(stripped) and not REVIEW_MARKER_LINE.match(stripped)
+        if collecting and evidence:
             return True
     return False
 
