@@ -1,5 +1,5 @@
 {
-  "total": 345,
+  "total": 344,
   "generatedAt": "2026-10-14T23:23:48.171Z",
   "violations": [
     {
@@ -1561,12 +1561,6 @@
       "line": 32,
       "rule": "MODEL_ID_LITERAL",
       "matched": "gemini-cli"
-    },
-    {
-      "file": "tools/ai-brain/manifest-audit.js",
-      "line": 33,
-      "rule": "MODEL_ID_LITERAL",
-      "matched": "deepseek-harness"
     },
     {
       "file": "tools/ai-brain/orchestrate.js",

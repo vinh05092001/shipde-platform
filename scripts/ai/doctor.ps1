@@ -7,7 +7,7 @@ param(
 . (Join-Path $PSScriptRoot "common.ps1")
 
 $failures = [System.Collections.Generic.List[string]]::new()
-$commands = @("git", "gh", "node", "npm", "pnpm", "docker", "dsh", "9router", "gemini", "codex", "claude")
+$commands = @("git", "gh", "node", "npm", "pnpm", "docker", "9router", "gemini", "codex", "claude")
 
 function Invoke-ShipDeBoundedProbe {
     param(
@@ -107,7 +107,7 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
 
 Write-Host "`n=== GLOBAL NPM VERSIONS ==="
 if (Get-Command npm -ErrorAction SilentlyContinue) {
-    $npmPackages = @("pnpm", "9router", "@deepseek-ai/dsh", "@google/gemini-cli", "@openai/codex", "@anthropic-ai/claude-code")
+    $npmPackages = @("pnpm", "9router", "@google/gemini-cli", "@openai/codex", "@anthropic-ai/claude-code")
     foreach ($package in $npmPackages) {
         $raw = @(& npm list --global $package --depth=0 --json 2>$null) -join "`n"
         $version = $null
@@ -316,7 +316,7 @@ if ($agentRouterCached) {
 }
 Write-Host ("AgentRouter user credential: {0}" -f $agentRouterDetail)
 Write-Host ("AgentRouter serves: Claude and Codex fallback (cloud, agentrouter.org, no /v1 in the base URL)")
-Write-Host ("9Router serves:     Gemini and dsh (local, 127.0.0.1:20128)")
+Write-Host ("9Router serves:     Gemini (local, 127.0.0.1:20128)")
 
 Write-Host ""
 Write-Host "=== AGENT AUTHENTICATION ==="
@@ -580,9 +580,7 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
 
 Write-Host "`n=== LOCAL SERVICES ==="
 $routerUp = Test-ShipDeTcpPort -HostName "127.0.0.1" -Port 20128
-$dshUp = Test-ShipDeTcpPort -HostName "127.0.0.1" -Port 3080
 Write-Host ("9Router 20128: {0}" -f $(if ($routerUp) { "UP" } else { "STOPPED" }))
-Write-Host ("DSH     3080: {0}" -f $(if ($dshUp) { "UP" } else { "STOPPED" }))
 
 if ($TestModels) {
     if (-not $routerUp) {

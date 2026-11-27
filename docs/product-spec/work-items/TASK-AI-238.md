@@ -52,3 +52,26 @@ Change only the validator, policy and existing contract-test file. This planning
 - **Trace:** Follows `#656` (`58a42e8e`) to remove per-file Tier G whitelisting so ongoing AI tooling and AI-collaboration doc maintenance (`scripts/**`, `tools/**`, `docs/product-spec/docs/10-ai-collaboration/**`, `docs/product-spec/evidence/**`, root `AGENTS.md`/`CLAUDE.md`) ships as PR-only Tier G with CI + exact-SHA Codex review instead of creating new `TASK-AI-*` Work Items. Dependency-only `package.json`/`pnpm-lock.yaml` updates stay Tier B in Slice 1 and are deferred to a separate slice with trusted `pnpm` verification.
 - **Preserved Tier B fail-closed boundaries:** Product code (`apps/**`, `packages/**`, `prisma/**`, `infra/**`, OpenAPI/contracts), normative product/decision docs (`00-control`..`09-delivery`), `package.json`/`pnpm-lock.yaml`, `.github/**`, CI/security gate scripts (`scripts/verify-trivy.ts`, `tools/openspec-check/**`, `tools/semgrep/**`, `scripts/ai/check-no-hardcode.mjs`, `scripts/ai/hardcode-allowlist.json`, `.gitleaks*`, `.trivyignore`, `.semgrep*`, `lefthook.yml`), nested `AGENTS.md`/`CLAUDE.md`, and `docs/product-spec/scripts/**` (policy/validator read from protected base only; no self-bootstrap).
 - **Enforced v3 Tier G invariants:** `scripts/ai/hardcode-baseline.json` requires strict shrink tied to modified/deleted source files (no metadata or surviving-row drift); `ecosystem-manifest.json` locks top-level fields and candidates and allows retiring non-blocking/non-CI-consumed entries while protecting `BLOCKING_GATE`, `ci-provisioned`, and workflow-referenced entries.
+
+## Continuation addendum 2 (retire DeepSeek Harness)
+
+- **Authorization and release route.** The operator approved retiring DeepSeek Harness on 2026-11-27, including its specific hardcode baseline exception. Publish this as a separate Tier B PR under the existing TASK-AI-238 record after #661 merges. Register row 355 stays unchanged.
+- **Outcome.** Stop installing, advertising, provisioning and launching the retired DSH lane. Retain supported Gemini, Claude and Controller-managed 9Router behavior. A caller of the retired manual lane receives an explicit refusal and points to the existing Controller intake entry point.
+- **Allowed paths for this continuation.** These paths and this addendum are the complete scope:
+
+  - `scripts/ai/bootstrap-worktrees.ps1`
+  - `scripts/ai/common.ps1`
+  - `scripts/ai/control.ps1`
+  - `scripts/ai/doctor.ps1`
+  - `scripts/ai/ecosystem.ps1`
+  - `scripts/ai/hardcode-baseline.json`
+  - `scripts/ai/install-clis.ps1`
+  - `scripts/ai/install-ecosystem.ps1`
+  - `scripts/ai/start-work-item.ps1`
+  - `tools/ai-brain/manifest-audit.js`
+  - `tools/ecosystem-manifest.json`
+  - `tools/ecosystem-profiles.json`
+
+- **Preservation.** Keep the CI workflow and the `control.ps1 -Action Test` entry point and checks. Only remove the matching DSH baseline exception and update its count from 345 to 344. Keep unrelated adopted tools, existing user installations, dashboard and historical fixtures. Record any remaining operator documentation that points to DSH as a follow-up.
+- **Pre-review evidence.** The draft passed 52 focused Node tests, `ecosystem.ps1 -Action Validate`, and the staged hardcode guard. The retired `start-work-item.ps1 -Author 9ROUTER` manual lane exited 1 with an explicit refusal. `cli.js intake --work-item` exited 0 with a valid local Work Item in the draft checkout. Repeat the applicable checks on the release candidate and use an existing valid Work Item for the intake smoke check.
+- **Release acceptance.** Verify the diff against the post-#661 base, rerun the focused suites, supported route checks, ecosystem validation, hardcode guard and full brain suite. Require PowerShell 7 `control.ps1 -Action Test` in required CI and independent exact-head review before merge.

@@ -246,46 +246,10 @@ function Test-ShipDeServiceIdentity {
                 Reason      = ("Process PID {0} ({1}) command line/path '{2}' does not contain required '9router' identity, and no 9Router HTTP signature was detected on port {3}." -f $Process.Id, $procName, $displayCmd, $Port)
             }
         }
-        "deepseek-harness" {
-            # Must identify DSH or deepseek-harness in executable path or command line
-            if ($combinedIdentity -match '(?i)(?:\\|/|@|\b)(?:dsh|deepseek-harness)(?:\b|\.exe|\.cmd|\.py|\.js|/)') {
-                return [PSCustomObject]@{
-                    IsVerified  = $true
-                    ServiceId   = $ServiceId
-                    ProcessId   = $Process.Id
-                    ProcessName = $procName
-                    CommandLine = $cmdLine
-                    Path        = $procPath
-                }
-            }
-
-            # Also check service-specific HTTP signature if port is responding
-            if ($Port -gt 0) {
-                try {
-                    $httpResp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 1 -ErrorAction SilentlyContinue
-                    if ($httpResp -and ($httpResp.Content -match '(?i)(?:dsh|deepseek)' -or $httpResp.Headers["Server"] -match '(?i)dsh')) {
-                        return [PSCustomObject]@{
-                            IsVerified  = $true
-                            ServiceId   = $ServiceId
-                            ProcessId   = $Process.Id
-                            ProcessName = $procName
-                            CommandLine = $cmdLine
-                            Path        = $procPath
-                        }
-                    }
-                } catch {}
-            }
-
-            $displayCmd = if ($cmdLine) { $cmdLine } elseif ($procPath) { $procPath } else { $procName }
-            return [PSCustomObject]@{
-                IsVerified  = $false
-                Reason      = ("Process PID {0} ({1}) command line/path '{2}' does not contain required 'dsh' or 'deepseek-harness' identity, and no DSH HTTP signature was detected on port {3}." -f $Process.Id, $procName, $displayCmd, $Port)
-            }
-        }
         default {
             return [PSCustomObject]@{
                 IsVerified = $false
-                Reason     = "Unknown service id: $ServiceId"
+                Reason     = "Unknown or retired service id: $ServiceId"
             }
         }
     }
@@ -342,7 +306,6 @@ function Assert-ShipDeManifest {
         "vinh05092001/shipde-platform",
         "vinh05092001/shipde-brain",
         "decolua/9router",
-        "deepseek-ai/deepseek-harness",
         "google-gemini/gemini-cli",
         "google/antigravity",
         "openai/codex",
@@ -490,7 +453,7 @@ function Assert-ShipDeManifest {
     }
 
     # 4. Candidates check: PILOT or WATCH only; a candidate promoted to adopted leaves this list
-    if (-not $Manifest.candidates) {
+    if ($null -eq $Manifest.PSObject.Properties["candidates"] -or $null -eq $Manifest.candidates) {
         $errors.Add("Manifest must define 'candidates' array.")
     } else {
         $candidates = @($Manifest.candidates)
@@ -618,9 +581,7 @@ function Invoke-ShipDeStatus {
 
     Write-Host "`n=== LOCAL SERVICES HEALTH ==="
     $routerUp = Test-ShipDePort -HostName "127.0.0.1" -Port 20128
-    $dshUp = Test-ShipDePort -HostName "127.0.0.1" -Port 3080
     Write-Host ("9Router (port 20128)      : {0}" -f $(if ($routerUp) { "RUNNING" } else { "STOPPED (Default Safe)" }))
-    Write-Host ("DSH (port 3080)           : {0}" -f $(if ($dshUp) { "RUNNING" } else { "STOPPED (Default Safe)" }))
 
     $activeProfileState = Get-ShipDeProfileState
     Write-Host ("Active Profile            : {0}" -f $(if ($activeProfileState) { $activeProfileState.profile } else { "NONE (Inactive/Stopped)" }))
@@ -634,7 +595,7 @@ function Invoke-ShipDeStatus {
     Write-Host "Parallel Writers per Item : 1 (Enforced)"
 
     Write-Host "`n=== AI WORKSPACE INTEGRITY ==="
-    $workspaces = @("shipde-platform", "shipde-claude", "shipde-dsh", "shipde-gemini", "shipde-codex")
+    $workspaces = @("shipde-platform", "shipde-claude", "shipde-gemini", "shipde-codex")
     foreach ($ws in $workspaces) {
         $wsPath = Join-Path $AiRoot $ws
         $exists = Test-Path -LiteralPath $wsPath
@@ -730,29 +691,8 @@ function Invoke-ShipDeActivate {
                         }
                         $proc = Start-Process -FilePath $execPath -ArgumentList $execArgs -PassThru -WindowStyle Hidden
                     }
-                } elseif ($svc -eq "deepseek-harness") {
-                    $port = if ($TestPortOverrides -and $TestPortOverrides.ContainsKey("deepseek-harness")) { $TestPortOverrides["deepseek-harness"] } else { 3080 }
-                    if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $port)) {
-                        $cmd = Get-Command "dsh" -ErrorAction SilentlyContinue
-                        if (-not $cmd) {
-                            throw "Required command for optional service 'deepseek-harness' (dsh) was not found in PATH."
-                        }
-                        Write-Host "Starting requested optional service: DSH web on localhost:$port..."
-                        $execPath = $cmd.Source
-                        $execArgs = @("web", "--port", "$port")
-                        if ($cmd.CommandType -eq "ExternalScript" -or $cmd.Source.EndsWith(".ps1")) {
-                            $cmdApp = Get-Command "dsh.cmd" -ErrorAction SilentlyContinue
-                            if ($cmdApp) {
-                                $execPath = $cmdApp.Source
-                            } else {
-                                $execPath = "powershell.exe"
-                                $execArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $cmd.Source) + $execArgs
-                            }
-                        }
-                        $proc = Start-Process -FilePath $execPath -ArgumentList $execArgs -PassThru -WindowStyle Hidden
-                    }
                 } else {
-                    throw "Unsupported optional service requested: '$svc'."
+                    throw "Unsupported or retired optional service requested: '$svc'."
                 }
 
                 $newlyLaunched = $false
@@ -1123,11 +1063,10 @@ function Invoke-ShipDeTests {
         }
         Write-Host "  [PASS] Synchronization round 2 produced 0 diff (100% idempotent)."
 
-        # Operational Test 11: Real service launch adapter, distinct ports per service, health checks, transaction rollback, and active reconciliation (Finding 5)
-        Write-Host "`nTest 11 [Operational]: Distinct service ports, health checks, rollback on failure, and safe reconciliation..."
+        # Operational Test 11: Real service launch adapter, health checks, transaction rollback, and active reconciliation (Finding 5)
+        Write-Host "`nTest 11 [Operational]: Service ports, health checks, rollback on failure, and safe reconciliation..."
         $testPortMap = @{
-            "nine-router"      = 29111
-            "deepseek-harness" = 29112
+            "nine-router" = 29111
         }
         $testLauncher = {
             param($svc)
@@ -1140,23 +1079,20 @@ function Invoke-ShipDeTests {
             }
         }
 
-        # 11a: Successful activation with distinct ports per service
+        # 11a: Successful activation with distinct port for active optional service (nine-router)
         Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices -ServiceLauncher $testLauncher
 
         $stateAfterActivate = Get-ShipDeProfileState
-        if (-not $stateAfterActivate -or $stateAfterActivate.started_pids.Count -ne 2) {
-            throw "Failed operational test: Active profile state did not record all started service PIDs (expected 2, got $($stateAfterActivate.started_pids.Count))!"
+        if (-not $stateAfterActivate -or $stateAfterActivate.started_pids.Count -ne 1) {
+            throw "Failed operational test: Active profile state did not record started service PID (expected 1, got $($stateAfterActivate.started_pids.Count))!"
         }
         $testPids = @($stateAfterActivate.started_pids)
         if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port 29111)) {
             throw "Failed operational test: Service 'nine-router' port 29111 is not responding!"
         }
-        if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port 29112)) {
-            throw "Failed operational test: Service 'deepseek-harness' port 29112 is not responding!"
-        }
-        Write-Host ("  [PASS] Launch adapter started services with distinct ports (29111, 29112; PIDs: {0}) and all health checks passed." -f ($testPids -join ", "))
+        Write-Host ("  [PASS] Launch adapter started active optional service (29111; PIDs: {0}) and health check passed." -f ($testPids -join ", "))
 
-        # 11b: Deactivate profile and verify real process termination and distinct port closure
+        # 11b: Deactivate profile and verify real process termination and port closure
         Invoke-ShipDeDeactivate -ProfilesPath $ProfilesPath
         Start-Sleep -Milliseconds 400
 
@@ -1170,33 +1106,19 @@ function Invoke-ShipDeTests {
         if (Test-ShipDePort -HostName "127.0.0.1" -Port 29111) {
             throw "Failed operational test: Port 29111 remains open after deactivation!"
         }
-        if (Test-ShipDePort -HostName "127.0.0.1" -Port 29112) {
-            throw "Failed operational test: Port 29112 remains open after deactivation!"
-        }
         $stateAfterDeactivate = Get-ShipDeProfileState
         if ($null -ne $stateAfterDeactivate) {
             throw "Failed operational test: Deactivate failed to clean up profile state file!"
         }
-        Write-Host "  [PASS] Deactivate successfully terminated both service PIDs, closed both distinct ports, and removed state file."
+        Write-Host "  [PASS] Deactivate successfully terminated service PID, closed port, and removed state file."
 
-        # 11c: Rollback when service 2 fails: service 1 must be terminated and port closed without leaking state
+        # 11c: Rollback when service fails to bind: no process or state leaked
         $partialFailingLauncher = {
             param($svc)
-            if ($svc -eq "nine-router") {
-                $port = 29111
-                $listenerScript = "[System.Net.Sockets.TcpListener]`$l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port); `$l.Start(); Start-Sleep -Seconds 30; `$l.Stop()"
-                $proc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $listenerScript -PassThru
-                return [PSCustomObject]@{
-                    Process = $proc
-                    Port    = $port
-                }
-            } else {
-                # Service 2 fails to bind / exits immediately
-                $proc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Milliseconds 50" -PassThru
-                return [PSCustomObject]@{
-                    Process = $proc
-                    Port    = 29112
-                }
+            $proc = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Milliseconds 50" -PassThru
+            return [PSCustomObject]@{
+                Process = $proc
+                Port    = 29111
             }
         }
 
@@ -1208,24 +1130,24 @@ function Invoke-ShipDeTests {
         }
 
         if (-not $rollbackPassed) {
-            throw "Failed operational test: Activation should have failed and rolled back when service 2 failed!"
+            throw "Failed operational test: Activation should have failed and rolled back when service failed!"
         }
         Start-Sleep -Milliseconds 300
         if (Test-ShipDePort -HostName "127.0.0.1" -Port 29111) {
-            throw "Failed operational test: Service 1 on port 29111 was leaked when service 2 failed activation!"
+            throw "Failed operational test: Service on port 29111 was leaked after failed activation!"
         }
         $stateAfterRollback = Get-ShipDeProfileState
         if ($null -ne $stateAfterRollback) {
             throw "Failed operational test: State file was written despite activation failure!"
         }
-        Write-Host "  [PASS] Partial failure in multi-service activation triggered clean transaction rollback without leaking process or port."
+        Write-Host "  [PASS] Failed service activation triggered clean transaction rollback without leaking process or port."
 
         # 11d: Active profile reconciliation: activating a new profile safely deactivates existing profile without leaking PIDs
         Invoke-ShipDeActivate -ProfileName "FOUNDATION" -ProfilesPath $ProfilesPath -StartOptionalServices -ServiceLauncher $testLauncher
         $firstState = Get-ShipDeProfileState
         $firstPids = @($firstState.started_pids)
-        if ($firstPids.Count -ne 2) {
-            throw "Failed operational test: Expected 2 PIDs for first activation."
+        if ($firstPids.Count -ne 1) {
+            throw "Failed operational test: Expected 1 PID for first activation."
         }
 
         # Activate second profile (BACKEND_FEATURE has no optional services by default)
@@ -1238,8 +1160,8 @@ function Invoke-ShipDeTests {
                 throw "Failed operational test: Reconciling active profile orphaned PID $p!"
             }
         }
-        if ((Test-ShipDePort -HostName "127.0.0.1" -Port 29111) -or (Test-ShipDePort -HostName "127.0.0.1" -Port 29112)) {
-            throw "Failed operational test: Ports remain open after profile reconciliation!"
+        if (Test-ShipDePort -HostName "127.0.0.1" -Port 29111) {
+            throw "Failed operational test: Port 29111 remains open after profile reconciliation!"
         }
         $secondState = Get-ShipDeProfileState
         if ($secondState.profile -ne "BACKEND_FEATURE") {
@@ -1527,30 +1449,15 @@ function Invoke-ShipDeTests {
         $approvedProc9r = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $approvedScript9r -PassThru
         $approvedPid9r = $approvedProc9r.Id
 
-        # Wait for first listener to start before allocating second port (Round 3 Finding 5)
-        for ($i = 0; $i -lt 10; $i++) {
+        # Wait for listener to start on loopback
+        for ($i = 0; $i -lt 15; $i++) {
             Start-Sleep -Milliseconds 200
             if (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPort9r15c) { break }
         }
 
-        # Now allocate second port after first listener is active
-        $isolatedPortDsh15c = Get-AvailableLoopbackPort
-
-        # Launch mock DSH listener whose command line explicitly contains the approved DSH identity
-        $approvedScriptDsh = "# dsh web service listener`n[System.Net.Sockets.TcpListener]`$l2 = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $isolatedPortDsh15c); `$l2.Start(); Start-Sleep -Seconds 30; `$l2.Stop()"
-        $approvedProcDsh = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", $approvedScriptDsh -PassThru
-        $approvedPidDsh = $approvedProcDsh.Id
-
-        # Wait up to 5s for both ports to become active on loopback
-        for ($i = 0; $i -lt 15; $i++) {
-            Start-Sleep -Milliseconds 200
-            if ((Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPort9r15c) -and (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPortDsh15c)) { break }
-        }
-
-        # Use TestPortOverrides to make activation check the isolated ports instead of production ports
+        # Use TestPortOverrides to make activation check the isolated port instead of production port
         $testPortMap15c = @{
-            "nine-router"      = $isolatedPort9r15c
-            "deepseek-harness" = $isolatedPortDsh15c
+            "nine-router" = $isolatedPort9r15c
         }
 
         $approvedPassed = $false
@@ -1563,23 +1470,20 @@ function Invoke-ShipDeTests {
 
         if (-not $approvedPassed) {
             Stop-Process -Id $approvedPid9r -Force -ErrorAction SilentlyContinue
-            Stop-Process -Id $approvedPidDsh -Force -ErrorAction SilentlyContinue
-            throw "Failed positive test: Pre-existing listeners with approved service identities were rejected unexpectedly!"
+            throw "Failed positive test: Pre-existing listener with approved 9Router identity was rejected unexpectedly!"
         }
 
         $stateAfterApproved = Get-ShipDeProfileState
         if ($null -eq $stateAfterApproved -or $stateAfterApproved.profile -ne "FOUNDATION") {
             Stop-Process -Id $approvedPid9r -Force -ErrorAction SilentlyContinue
-            Stop-Process -Id $approvedPidDsh -Force -ErrorAction SilentlyContinue
-            throw "Failed positive test: State file was not created for approved pre-existing services!"
+            throw "Failed positive test: State file was not created for approved pre-existing service!"
         }
 
         # Deactivate profile cleanly
         Invoke-ShipDeDeactivate -ProfilesPath $ProfilesPath
         Stop-Process -Id $approvedPid9r -Force -ErrorAction SilentlyContinue
-        Stop-Process -Id $approvedPidDsh -Force -ErrorAction SilentlyContinue
         for ($i = 0; $i -lt 10; $i++) {
-            if ((-not (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPort9r15c)) -and (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPortDsh15c))) { break }
+            if (-not (Test-ShipDePort -HostName "127.0.0.1" -Port $isolatedPort9r15c)) { break }
             Start-Sleep -Milliseconds 200
         }
 
@@ -1587,7 +1491,7 @@ function Invoke-ShipDeTests {
         if ($null -ne $stateAfterDeactivateApproved) {
             throw "Failed positive test: State file remained after deactivation of approved pre-existing service!"
         }
-        Write-Host "  [PASS] Pre-existing listeners with approved 9Router and DSH command line identities verified, accepted, and safely deactivated (isolated ports $isolatedPort9r15c and $isolatedPortDsh15c, real services on production ports preserved)."
+        Write-Host "  [PASS] Pre-existing listener with approved 9Router command line identity verified, accepted, and safely deactivated (isolated port $isolatedPort9r15c, real service on production port preserved)."
 
         # Test 16 (AC-AI-26): Agent Scan pip metadata detection with controlled fixture
         Write-Host "`nTest 16 [Positive / AC-AI-26]: Agent Scan 0.6.1 detection via pip metadata..."

@@ -16,7 +16,6 @@
         "node",
         "pnpm",
         "nine-router",
-        "deepseek-harness",
         "gemini-cli",
         "antigravity-cli",
         "codex-cli",
@@ -44,7 +43,7 @@
         "turborepo",
         "gitleaks"
       ],
-      "optional_services": ["nine-router", "deepseek-harness"],
+      "optional_services": ["nine-router"],
       "network_policy": "localhost-only",
       "concurrency_limits": {
         "max_implementation_agents": 1,
@@ -256,7 +255,6 @@
         "git",
         "node",
         "nine-router",
-        "deepseek-harness",
         "claude-code",
         "playwright-cli",
         "vercel-agent-skills",
@@ -274,7 +272,6 @@
       "required_tools": ["shipde-platform", "git"],
       "optional_services": [
         "nine-router",
-        "deepseek-harness",
         "chrome-devtools-mcp",
         "playwright-mcp"
       ],
