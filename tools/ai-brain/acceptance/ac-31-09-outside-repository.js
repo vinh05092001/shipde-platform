@@ -1,6 +1,6 @@
 ﻿'use strict';
 // AC-AI-31-09 - Negative proofs exit 2 outside repository.
-// Spawns each acceptance script (ac-31-01 through ac-31-08) in a temp
+// Spawns each surviving acceptance script (ac-31-01 through ac-31-04) in a temp
 // directory where the sources are absent and asserts each exits 2 with
 // SOURCE_MISSING.
 const fs = require('fs');
@@ -8,7 +8,7 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 
-const REPO_MARKER = 'tools/ai-brain/qualification-gate.js';
+const REPO_MARKER = 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv';
 if (!fs.existsSync(REPO_MARKER)) {
   console.error('SOURCE_MISSING: ' + REPO_MARKER);
   process.exit(2);
@@ -19,10 +19,6 @@ const NEGATIVE_SCRIPTS = [
   'tools/ai-brain/acceptance/ac-31-02-status-divergence.js',
   'tools/ai-brain/acceptance/ac-31-03-dependency-declared.js',
   'tools/ai-brain/acceptance/ac-31-04-dependency-repointed.js',
-  'tools/ai-brain/acceptance/ac-31-05-gate-rule.js',
-  'tools/ai-brain/acceptance/ac-31-06-gate-rule-refused.js',
-  'tools/ai-brain/acceptance/ac-31-07-grant-credential-free.js',
-  'tools/ai-brain/acceptance/ac-31-08-credential-in-grant.js',
 ];
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-31-09-'));
@@ -30,6 +26,11 @@ let allPassed = true;
 
 for (const script of NEGATIVE_SCRIPTS) {
   const absScript = path.resolve(script);
+  if (!fs.existsSync(absScript)) {
+    console.error('SCRIPT_MISSING: ' + script);
+    allPassed = false;
+    continue;
+  }
   const result = spawnSync(process.execPath, [absScript], {
     cwd: tmpDir,
     encoding: 'utf8',
