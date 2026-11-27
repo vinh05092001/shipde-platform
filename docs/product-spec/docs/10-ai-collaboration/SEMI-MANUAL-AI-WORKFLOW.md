@@ -170,7 +170,7 @@ The controller reads `tools/ecosystem-manifest.json` and activates only the gove
 | UI implementation        | Gemini, governed UI skills, Vercel Agent Skills, component inspection, Storybook |
 | E2E/API                  | Playwright Test, MSW, Prism                                                      |
 | Browser diagnosis        | Playwright CLI, Chrome DevTools MCP                                              |
-| Research                 | `shipde-brain`, one of DSH/Hermes, Repomix                                       |
+| Research                 | Repository-local lessons (`tools/ai-brain/lessons`), Hermes, Repomix             |
 | Review                   | Codex plus controller or governed review daemon                                  |
 | Multi-agent coordination | Governed mailbox capability (`agent-intercom`)                                   |
 | Security                 | Agent Scan                                                                       |

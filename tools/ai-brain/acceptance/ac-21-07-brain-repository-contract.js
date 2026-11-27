@@ -1,20 +1,13 @@
 'use strict';
-// AC-AI-21-07 — the invariant: the real ecosystem manifest declares shipde-brain
-// as a governed knowledge repository.
+// AC-AI-21-07 — invariant: the real ecosystem manifest enforces the surviving
+// repository-local lesson trust boundary (AI-TOOL-06) after retiring the external
+// shipde-brain checkout (TASK-AI-238 Addendum 5).
 //
-// The contract lives in `./lib/brain-repository-contract.js`, the same module the
-// negative proof `ac-21-08-brain-repository-overstated.js` requires, so the gate
-// and the proof of the gate cannot drift apart. The manifest read here is the
-// real `tools/ecosystem-manifest.json`; no fixture stands in for it. Run outside
-// the repository it exits 2, not 0.
-//
-// This row asserts the declaration surface this Work Item depends on. It does not
-// assert the reconciliation `TASK-AI-17` performed, which `AC-AI-17-01` and
-// `AC-AI-17-04` already own, and it does not assert a lifecycle state.
+// Run outside the repository it exits 2, not 0.
 const fs = require('fs');
 const {
   MANIFEST_PATH,
-  BRAIN_ID,
+  UNTRUSTED_POLICY,
   brainRepositoryViolations,
 } = require('./lib/brain-repository-contract');
 
@@ -25,10 +18,11 @@ if (!fs.existsSync(MANIFEST_PATH)) {
 
 const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
 
-// CONTROL: the contract must be able to fail at all. An empty manifest declares
-// no brain entry, so it must report the missing declaration.
+// CONTROL: the contract detector must fail on an empty manifest.
 if (brainRepositoryViolations({}).length === 0) {
-  console.error('CONTROL_FAILED: the contract detector cannot report a missing declaration');
+  console.error(
+    'CONTROL_FAILED: the contract detector cannot report a missing trust-boundary policy'
+  );
   process.exit(2);
 }
 
@@ -39,12 +33,9 @@ if (violations.length > 0) {
 }
 
 console.log(
-  'BRAIN_REPOSITORY_CONTRACT_HOLDS: ' +
-    BRAIN_ID +
-    ' is declared as a governed knowledge repository in ' +
+  'BRAIN_TRUST_BOUNDARY_HOLDS: ' +
+    UNTRUSTED_POLICY +
+    ' enforces repository-local human-reviewed lessons with no PII/credentials in ' +
     MANIFEST_PATH
-);
-console.log(
-  'evidence: canonical source, 40-character pin, declared role and boundary, and the untrusted-until-human-reviewed policy'
 );
 process.exit(0);

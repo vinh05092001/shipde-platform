@@ -43,7 +43,6 @@ const FAMILY_A = [
     repos: [
       'vinh05092001/shipde-platform',
       'NousResearch/hermes-agent',
-      'vinh05092001/shipde-brain',
       'decolua/9router',
       'anomalyco/opencode',
       'openai/codex',

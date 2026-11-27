@@ -304,7 +304,6 @@ function Assert-ShipDeManifest {
     # Approved canonical repository identities (Finding 1: 30 baseline + 7 additions)
     $canonicalApprovedRepos = @(
         "vinh05092001/shipde-platform",
-        "vinh05092001/shipde-brain",
         "decolua/9router",
         "google-gemini/gemini-cli",
         "google/antigravity",
