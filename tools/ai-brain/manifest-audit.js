@@ -30,7 +30,6 @@ const BINARY_ALIASES = {
   'claude-code': 'claude',
   'codex-cli': 'codex',
   'gemini-cli': 'gemini',
-  'deepseek-harness': 'dsh',
   context7: 'ctx7',
   promptfoo: 'pf',
   'docker-compose': 'docker',

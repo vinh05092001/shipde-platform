@@ -238,7 +238,6 @@ $integratedAssets = [System.Collections.Generic.List[object]]::new()
 # Mapping for npm global package names
 $npmPackageMap = @{
     "nine-router"      = "9router"
-    "deepseek-harness" = "@deepseek-ai/dsh"
     "gemini-cli"       = "@google/gemini-cli"
     "codex-cli"        = "@openai/codex"
     "claude-code"      = "@anthropic-ai/claude-code"
@@ -258,7 +257,6 @@ $cliCommandMap = @{
     "pnpm"             = "pnpm"
     "docker-compose"   = "docker"
     "nine-router"      = "9router"
-    "deepseek-harness" = "dsh"
     "gemini-cli"       = "gemini"
     "antigravity-cli"  = "agy"
     "codex-cli"        = "codex"

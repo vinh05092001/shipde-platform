@@ -67,7 +67,6 @@ if (Test-Path -LiteralPath $lefthookPackage) {
 
 $worktrees = @(
     @{ Path = $paths.Claude; Branch = "agent/claude" },
-    @{ Path = $paths.Dsh; Branch = "agent/dsh" },
     @{ Path = $paths.Gemini; Branch = "agent/gemini" },
     @{ Path = $paths.Codex; Branch = "agent/codex-review" }
 )
@@ -97,7 +96,6 @@ foreach ($entry in $paths.GetEnumerator()) {
     $branch = (& git -C $entry.Value branch --show-current).Trim()
     $parkedBranch = switch ($entry.Key) {
         "Claude" { "agent/claude" }
-        "Dsh" { "agent/dsh" }
         "Gemini" { "agent/gemini" }
         "Codex" { "agent/codex-review" }
         default { "main" }

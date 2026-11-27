@@ -119,27 +119,6 @@
       "profiles": ["FOUNDATION", "RESEARCH_ONLY"]
     },
     {
-      "id": "deepseek-harness",
-      "name": "DeepSeek Harness",
-      "canonical_url": "https://github.com/deepseek-ai/deepseek-harness",
-      "repository": "deepseek-ai/deepseek-harness",
-      "owner": "deepseek-ai",
-      "kind": "cli-service",
-      "role": "Constrained author client for low-risk mechanical Work Items in shipde-dsh.",
-      "source_of_truth_boundary": "Developer preview workspace; constrained to assigned low-risk scope.",
-      "install_method": "npm-global",
-      "pinned_version_or_commit": "0.1.1-rc.2",
-      "platform": "windows",
-      "lifecycle_state": "INSTALLED",
-      "default_enabled": false,
-      "blocking_policy": "NON_BLOCKING",
-      "permissions": "localhost-network-port-3080",
-      "telemetry_network_behavior": "localhost-only-telemetry-off",
-      "health_check": "Test-ShipDePort -HostName 127.0.0.1 -Port 3080",
-      "rollback": "Stop-Process -Name dsh -Force",
-      "profiles": ["FOUNDATION", "RESEARCH_ONLY"]
-    },
-    {
       "id": "gemini-cli",
       "name": "Gemini CLI",
       "canonical_url": "https://github.com/google-gemini/gemini-cli",

@@ -20,7 +20,13 @@ param(
 
 Assert-ShipDeCommand git
 $paths = Get-ShipDePaths -AiRoot $AiRoot
-$workspace = if ($Author -eq "GEMINI") { $paths.Gemini } elseif ($Author -eq "CLAUDE") { $paths.Claude } else { $paths.Dsh }
+if ($Author -eq "GEMINI") {
+    $workspace = $paths.Gemini
+} elseif ($Author -eq "CLAUDE") {
+    $workspace = $paths.Claude
+} else {
+    throw "Unsupported or retired author workspace route: '$Author'. DeepSeek Harness (dsh/shipde-dsh) has been retired (TASK-AI-238). For 9ROUTER lanes, prepare via 'node tools/ai-brain/cli.js intake --work-item <ID>' (add '--run' to launch) or see WORKER-PLAYBOOK for orchestrate (--goal)."
+}
 $expectedSuffix = "$($WorkItemId.ToLowerInvariant())-$Slug"
 if ([string]::IsNullOrWhiteSpace($Branch)) {
     $Branch = "feat/$expectedSuffix"

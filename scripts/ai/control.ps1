@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync", "Supervise", "Test")]
     [string]$Action = "Menu",
 
@@ -953,8 +953,15 @@ When finished, return only: Work Item ID, branch, assigned author, Work Item pat
 function Get-ShipDePromptForItem {
     param([Parameter(Mandatory = $true)][object]$Item)
 
-    $workspace = if ($Item.Author -eq "GEMINI") { $script:Paths.Gemini } elseif ($Item.Author -eq "CLAUDE") { $script:Paths.Claude } else { $script:Paths.Dsh }
-    $promptName = if ($Item.Author -eq "GEMINI") { "GEMINI-START-PROMPT.md" } elseif ($Item.Author -eq "CLAUDE") { "CLAUDE-START-PROMPT.md" } else { "NINEROUTER-START-PROMPT.md" }
+    if ($Item.Author -eq "GEMINI") {
+        $workspace = $script:Paths.Gemini
+        $promptName = "GEMINI-START-PROMPT.md"
+    } elseif ($Item.Author -eq "CLAUDE") {
+        $workspace = $script:Paths.Claude
+        $promptName = "CLAUDE-START-PROMPT.md"
+    } else {
+        throw "Unsupported or retired author terminal lane: '$($Item.Author)'. DeepSeek Harness (dsh/shipde-dsh) has been retired (TASK-AI-238). For 9ROUTER lanes, prepare via 'node tools/ai-brain/cli.js intake --work-item <ID>' (add '--run' to launch) or see WORKER-PLAYBOOK for orchestrate (--goal)."
+    }
     $promptPath = Join-Path $workspace "docs/product-spec/docs/10-ai-collaboration/$promptName"
     if (-not (Test-Path $promptPath)) {
         $promptPath = Join-Path $workspace "docs/product-spec/docs/10-ai-collaboration/GEMINI-START-PROMPT.md"
@@ -981,7 +988,13 @@ function Start-ShipDeAssignedAuthor {
         -Branch $Item.Branch `
         -AiRoot $AiRoot
 
-    $workspace = if ($Item.Author -eq "GEMINI") { $script:Paths.Gemini } elseif ($Item.Author -eq "CLAUDE") { $script:Paths.Claude } else { $script:Paths.Dsh }
+    if ($Item.Author -eq "GEMINI") {
+        $workspace = $script:Paths.Gemini
+    } elseif ($Item.Author -eq "CLAUDE") {
+        $workspace = $script:Paths.Claude
+    } else {
+        throw "Unsupported or retired author terminal lane: '$($Item.Author)'. DeepSeek Harness (dsh/shipde-dsh) has been retired (TASK-AI-238). For 9ROUTER lanes, prepare via 'node tools/ai-brain/cli.js intake --work-item <ID>' (add '--run' to launch) or see WORKER-PLAYBOOK for orchestrate (--goal)."
+    }
     $prompt = Get-ShipDePromptForItem -Item $Item
     Set-ShipDeClipboard -Text $prompt
 
@@ -997,16 +1010,7 @@ function Start-ShipDeAssignedAuthor {
         Assert-ShipDeCommand claude
         Start-ShipDeTerminal -Workspace $workspace -Command "claude"
     } else {
-        Assert-ShipDeCommand 9router
-        Assert-ShipDeCommand dsh
-        if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port 20128)) {
-            Start-ShipDeTerminal -Workspace $workspace -Command "9router"
-        }
-        if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port 3080)) {
-            Start-ShipDeTerminal -Workspace $workspace -Command "dsh web"
-            Start-Sleep -Seconds 2
-        }
-        Start-Process "http://127.0.0.1:3080" | Out-Null
+        throw "Unsupported or retired author terminal lane: '$($Item.Author)'. DeepSeek Harness (dsh/shipde-dsh) has been retired (TASK-AI-238). For 9ROUTER lanes, prepare via 'node tools/ai-brain/cli.js intake --work-item <ID>' (add '--run' to launch) or see WORKER-PLAYBOOK for orchestrate (--goal)."
     }
 
     Write-Host "ASSIGNED AUTHOR STARTED"
@@ -1431,13 +1435,20 @@ function Start-ShipDeFixRound {
         [Parameter(Mandatory = $true)][object]$Item
     )
 
-    $workspace = if ($Item.Author -eq "GEMINI") { $script:Paths.Gemini } else { $script:Paths.Dsh }
+    if ($Item.Author -eq "GEMINI") {
+        $workspace = $script:Paths.Gemini
+        $promptName = "GEMINI-START-PROMPT.md"
+    } elseif ($Item.Author -eq "CLAUDE") {
+        $workspace = $script:Paths.Claude
+        $promptName = "CLAUDE-START-PROMPT.md"
+    } else {
+        throw "Unsupported or retired author fix-round lane: '$($Item.Author)'. DeepSeek Harness (dsh/shipde-dsh) has been retired (TASK-AI-238)."
+    }
     Assert-ShipDeClean -Path $workspace
     Invoke-ShipDeGit -Path $workspace -Arguments @("fetch", "origin", "--prune") | Out-Null
     Invoke-ShipDeGit -Path $workspace -Arguments @("switch", $Item.Branch) | Out-Null
     Invoke-ShipDeGit -Path $workspace -Arguments @("merge", "--ff-only", "origin/$($Item.Branch)") | Out-Null
 
-    $promptName = if ($Item.Author -eq "GEMINI") { "GEMINI-START-PROMPT.md" } else { "NINEROUTER-START-PROMPT.md" }
     $promptPath = Join-Path $workspace "docs/product-spec/docs/10-ai-collaboration/$promptName"
     $text = Get-Content $promptPath -Raw -Encoding UTF8
     $section = ($text -split "## Review-fix prompt", 2)[1]
@@ -1450,17 +1461,11 @@ function Start-ShipDeFixRound {
     if ($Item.Author -eq "GEMINI") {
         $command = if (Get-Command agy -ErrorAction SilentlyContinue) { "agy" } else { "gemini" }
         Start-ShipDeTerminal -Workspace $workspace -Command $command
+    } elseif ($Item.Author -eq "CLAUDE") {
+        Assert-ShipDeCommand claude
+        Start-ShipDeTerminal -Workspace $workspace -Command "claude"
     } else {
-        Assert-ShipDeCommand 9router
-        Assert-ShipDeCommand dsh
-        if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port 20128)) {
-            Start-ShipDeTerminal -Workspace $workspace -Command "9router"
-        }
-        if (-not (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port 3080)) {
-            Start-ShipDeTerminal -Workspace $workspace -Command "dsh web"
-            Start-Sleep -Seconds 2
-        }
-        Start-Process "http://127.0.0.1:3080" | Out-Null
+        throw "Unsupported or retired author fix-round lane: '$($Item.Author)'. DeepSeek Harness (dsh/shipde-dsh) has been retired (TASK-AI-238)."
     }
     Write-Host "Correction prompt copied and the same author reopened on the same branch."
 }
@@ -3211,7 +3216,6 @@ function Invoke-ShipDeSync {
 
     $parked = [ordered]@{
         Claude = "agent/claude"
-        Dsh = "agent/dsh"
         Gemini = "agent/gemini"
         Codex = "agent/codex-review"
     }
@@ -3266,7 +3270,6 @@ function Show-ShipDeStatus {
 
     Write-Host "`n=== SERVICES ==="
     Write-Host ("9Router : {0}" -f $(if (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port 20128) { "UP" } else { "STOPPED" }))
-    Write-Host ("DSH     : {0}" -f $(if (Test-ShipDeTcpPort -HostName "127.0.0.1" -Port 3080) { "UP" } else { "STOPPED" }))
 
     Write-Host "`n=== OPEN PULL REQUESTS ==="
     $pullRequests = @(Get-ShipDeOpenPullRequests)

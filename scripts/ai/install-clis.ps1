@@ -49,13 +49,6 @@ $npmTools = @(
         RequiredVersion = $null
     },
     [ordered]@{
-        Name = "DeepSeek Harness"
-        Command = "dsh"
-        Package = "@deepseek-ai/dsh"
-        InstallSpec = "@deepseek-ai/dsh@0.1.1-rc.2"
-        RequiredVersion = "^0\.1\.1-rc\.2$"
-    },
-    [ordered]@{
         Name = "Gemini CLI"
         Command = "gemini"
         Package = "@google/gemini-cli"
