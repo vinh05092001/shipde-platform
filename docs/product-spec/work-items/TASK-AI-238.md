@@ -45,3 +45,10 @@ Change only the validator, policy and existing contract-test file. This planning
 - `pnpm test:brain`
 - `pnpm ai:check`
 - `git diff --check`
+
+## Continuation addendum (v3 Slice 1 — operator-approved tooling & maintenance route)
+
+- **Continuation authority:** Operator directive ("dọn liền") with 3-way consensus (AGY 08 + Claude + Codex) reusing `TASK-AI-238` (register row 355 unchanged; no new `TASK-AI-*` item or register row created).
+- **Trace:** Follows `#656` (`58a42e8e`) to remove per-file Tier G whitelisting so ongoing AI tooling and AI-collaboration doc maintenance (`scripts/**`, `tools/**`, `docs/product-spec/docs/10-ai-collaboration/**`, `docs/product-spec/evidence/**`, root `AGENTS.md`/`CLAUDE.md`) ships as PR-only Tier G with CI + exact-SHA Codex review instead of creating new `TASK-AI-*` Work Items. Dependency-only `package.json`/`pnpm-lock.yaml` updates stay Tier B in Slice 1 and are deferred to a separate slice with trusted `pnpm` verification.
+- **Preserved Tier B fail-closed boundaries:** Product code (`apps/**`, `packages/**`, `prisma/**`, `infra/**`, OpenAPI/contracts), normative product/decision docs (`00-control`..`09-delivery`), `package.json`/`pnpm-lock.yaml`, `.github/**`, CI/security gate scripts (`scripts/verify-trivy.ts`, `tools/openspec-check/**`, `tools/semgrep/**`, `scripts/ai/check-no-hardcode.mjs`, `scripts/ai/hardcode-allowlist.json`, `.gitleaks*`, `.trivyignore`, `.semgrep*`, `lefthook.yml`), nested `AGENTS.md`/`CLAUDE.md`, and `docs/product-spec/scripts/**` (policy/validator read from protected base only; no self-bootstrap).
+- **Enforced v3 Tier G invariants:** `scripts/ai/hardcode-baseline.json` requires strict shrink tied to modified/deleted source files (no metadata or surviving-row drift); `ecosystem-manifest.json` locks top-level fields and candidates and allows retiring non-blocking/non-CI-consumed entries while protecting `BLOCKING_GATE`, `ci-provisioned`, and workflow-referenced entries.
