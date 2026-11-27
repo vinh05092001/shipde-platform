@@ -49,7 +49,7 @@ Compare Nox per security scope with current Gitleaks, Trivy, Semgrep and agent-s
 
 ## Verification and limitations
 
-Task/artifact: inspect repository declarations, run `node --test tools/ai-brain/test/repo-integration-group-9.test.js tools/ai-brain/test/repo-integration-evidence.test.js` and `python docs/product-spec/scripts/validate_docs.py`. Tests check evidence structure, not live tool availability.
+Task/artifact: inspect repository declarations, run `node --test tools/ai-brain/test/repo-integration-groups.test.js tools/ai-brain/test/repo-integration-evidence.test.js` (consolidated from `repo-integration-group-9.test.js` in PR #655) and `python docs/product-spec/scripts/validate_docs.py`. Tests check evidence structure, not live tool availability.
 
 SHA: pending Claude commit. No EXECUTION_VERIFIED or ACCEPTED claim. CI and independent review pending.
 

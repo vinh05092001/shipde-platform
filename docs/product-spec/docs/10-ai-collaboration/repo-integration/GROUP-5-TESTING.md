@@ -165,6 +165,16 @@ accessibility incomplete/violations become findings, performance budget breaches
 ]
 ```
 
+## CI vs local reconciliation (2026-11-27)
+
+- **Lighthouse CI (`googlechrome/lighthouse-ci`)**: Enforced in CI workflow `.github/workflows/current-application.yml`, job `current-application`, step `Lighthouse CI budgets`, command `pnpm --filter @shipde/web test:lighthouse` (uploads `lighthouse-report` from `apps/web/lhci-report/`). Local installation is not assumed or promoted (`tool-manifest.json` keeps `installed: false`, evidence stays `DECLARED`).
+- **k6 (`grafana/k6`)**: Provisioned and executed in CI workflow `.github/workflows/current-application.yml`, job `current-application`, steps `Install pinned k6` and `k6 API load thresholds`, command `pnpm test:load` (installs pinned k6 `2.3.0` from `tools/ecosystem-manifest.json` on `ubuntu-latest`). Local binary installation is not assumed or promoted (`tool-manifest.json` keeps `installed: false`, evidence stays `DECLARED`).
+
+## Current runnable verification
+
+- `node --test tools/ai-brain/test/repo-integration-groups.test.js tools/ai-brain/test/repo-integration-evidence.test.js` (consolidated from `repo-integration-group-5.test.js` in PR #655)
+- `python docs/product-spec/scripts/validate_docs.py`
+
 ## Local verification ? 2026-10-17
 
 - `node --test tools/ai-brain/test/repo-integration-group-5.test.js tools/ai-brain/test/repo-integration-evidence.test.js`: exit 0, 10 passed, 0 failed, 0 skipped.

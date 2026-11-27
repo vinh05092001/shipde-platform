@@ -23,48 +23,48 @@ Work Item: `GOAL-AUTOCLAW-REPOS-9`. Uses [the existing five-state contract](../R
   },
   {
     "workItemId": "GOAL-AUTOCLAW-REPOS-9",
-    "toolId": "pact-js",
+    "toolId": null,
     "repo": "pact-foundation/pact-js",
     "state": "DECLARED",
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md",
+    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-8-CONDITIONAL.md:declaration",
     "command": null,
     "blocked": true,
-    "blockedReason": "Execution not verified; await requirement or comparative measurement.",
+    "blockedReason": "Retired from live tool-manifest.json on 2026-11-27 (zero live consumers); historical inventory row preserved pending future requirement.",
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "versionRef": "Unpinned declaration",
     "capability": "consumer/provider contracts",
-    "registrationPending": false
+    "registrationPending": true
   },
   {
     "workItemId": "GOAL-AUTOCLAW-REPOS-9",
-    "toolId": "toxiproxy",
+    "toolId": null,
     "repo": "Shopify/toxiproxy",
     "state": "DECLARED",
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md",
+    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-8-CONDITIONAL.md:declaration",
     "command": null,
     "blocked": true,
-    "blockedReason": "Execution not verified; await requirement or comparative measurement.",
+    "blockedReason": "Retired from live tool-manifest.json on 2026-11-27 (zero live consumers); historical inventory row preserved pending future requirement.",
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "versionRef": "Unpinned declaration",
     "capability": "network fault tests",
-    "registrationPending": false
+    "registrationPending": true
   },
   {
     "workItemId": "GOAL-AUTOCLAW-REPOS-9",
-    "toolId": "hoverfly",
+    "toolId": null,
     "repo": "SpectoLabs/hoverfly",
     "state": "DECLARED",
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md",
+    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-8-CONDITIONAL.md:declaration",
     "command": null,
     "blocked": true,
-    "blockedReason": "Execution not verified; await requirement or comparative measurement.",
+    "blockedReason": "Retired from live tool-manifest.json on 2026-11-27 (zero live consumers); historical inventory row preserved pending future requirement.",
     "verifiedAt": "2026-10-17T00:00:00.000Z",
     "verifiedBy": "codex",
     "versionRef": "Unpinned declaration",
     "capability": "capture/replay/simulation",
-    "registrationPending": false
+    "registrationPending": true
   },
   {
     "workItemId": "GOAL-AUTOCLAW-REPOS-9",
@@ -137,7 +137,7 @@ Trigger: concrete requirement in an approved Work Item. Each capability above id
 
 ## Verification and limitations
 
-Task/artifact: inspect repository declarations, run `node --test tools/ai-brain/test/repo-integration-group-8.test.js tools/ai-brain/test/repo-integration-evidence.test.js` and `python docs/product-spec/scripts/validate_docs.py`. Tests check evidence structure, not live tool availability.
+Task/artifact: inspect repository declarations, run `node --test tools/ai-brain/test/repo-integration-groups.test.js tools/ai-brain/test/repo-integration-evidence.test.js` (consolidated from `repo-integration-group-8.test.js` in PR #655) and `python docs/product-spec/scripts/validate_docs.py`. Tests check evidence structure, not live tool availability.
 
 SHA: pending Claude commit. No EXECUTION_VERIFIED or ACCEPTED claim. CI and independent review pending.
 

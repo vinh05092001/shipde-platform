@@ -100,6 +100,16 @@ remain unavailable. Scanner unavailable/error must never become PASS even when a
 ]
 ```
 
+## CI vs local reconciliation (2026-11-27)
+
+- **Trivy (`aquasecurity/trivy`)**: Provisioned and executed in CI workflow `.github/workflows/security-baseline.yml`, job `dependency-scan`, steps `Install Pinned Trivy` (pinned version from `scripts/verify-trivy.ts`) and `Trivy vulnerability and misconfiguration gate`, command `pnpm security:trivy`. Local binary installation is not assumed or promoted (`tool-manifest.json` keeps `installed: false`, evidence stays `DECLARED`).
+- **Semgrep (`semgrep/semgrep`)**: Provisioned and executed in CI workflow `.github/workflows/security-baseline.yml`, job `code-scan`, steps `Install pinned Semgrep` (pinned version from `tools/ecosystem-manifest.json`) and `Semgrep rule fixtures and blocking scan`, commands `semgrep --test tools/semgrep/rules` and `semgrep scan --config tools/semgrep/rules --error --metrics=off apps packages` (local wrapper script `pnpm security:semgrep`). Local binary installation is not assumed or promoted (`tool-manifest.json` keeps `installed: false`, evidence stays `DECLARED`).
+
+## Current runnable verification
+
+- `node --test tools/ai-brain/test/repo-integration-groups.test.js tools/ai-brain/test/repo-integration-evidence.test.js` (consolidated from `repo-integration-group-6.test.js` in PR #655)
+- `python docs/product-spec/scripts/validate_docs.py`
+
 ## Local verification ? 2026-10-17
 
 - `node --test tools/ai-brain/test/repo-integration-group-6.test.js tools/ai-brain/test/repo-integration-evidence.test.js`: exit 0, 12 passed, 0 failed, 0 skipped.
