@@ -73,9 +73,10 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
       row(1, 'TASK-AI-1', 'MERGED', 'docs/product-spec/work-items/TASK-AI-1.md', '10', 'a1'),
       row(2, 'TASK-AI-2', 'SUPERSEDED', 'docs/product-spec/work-items/TASK-AI-2.md'),
       row(3, 'TASK-AI-3', 'READY_FOR_AUTHOR', 'docs/product-spec/work-items/TASK-AI-3.md'),
+      row(355, 'TASK-AI-238', 'MERGED', 'docs/product-spec/work-items/TASK-AI-238.md', '656', '58a42e8e'),
     ].join('\n') + '\n'
   );
-  for (const n of [1, 2, 3])
+  for (const n of [1, 2, 3, 238])
     write(`docs/product-spec/work-items/TASK-AI-${n}.md`, `# TASK-AI-${n}\n`);
   write('docs/notes.md', 'old note\n');
   write('AGENTS.md', '# agents\n');
@@ -114,6 +115,7 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
     'tools/ecosystem-manifest.json',
     JSON.stringify(
       {
+        policies: { require_pinned_versions: true },
         orchestrator_runtime: { id: 'agent-orchestrator', pinned_version_or_commit: '0.13.0' },
         adopted: [
           {
@@ -126,6 +128,26 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
             default_enabled: true,
             source_of_truth_boundary: 'Original boundary.',
           },
+          {
+            id: 'open-spec',
+            pinned_version_or_commit: '1.0.0',
+            install_method: 'pinned-snapshot',
+            blocking_policy: 'NON_BLOCKING',
+            health_check: 'bash tools/openspec-check/run.sh',
+            lifecycle_state: 'ADOPTED',
+            default_enabled: true,
+            source_of_truth_boundary: 'CI spec check.',
+          },
+          {
+            id: 'deepseek-harness',
+            pinned_version_or_commit: '0.1.1-rc.2',
+            install_method: 'npm-global',
+            blocking_policy: 'ADVISORY',
+            health_check: 'dsh --version',
+            lifecycle_state: 'ADOPTED',
+            default_enabled: false,
+            source_of_truth_boundary: 'Legacy DSH lane.',
+          },
         ],
         product_dependencies: [{ id: 'node', pinned_version_or_commit: '24.15.0' }],
         candidates: [{ id: 'nock', lifecycle_state: 'WATCH' }],
@@ -134,12 +156,96 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
       2
     ) + '\n'
   );
+  write('tools/ecosystem-profiles.json', '{"default":["semgrep","deepseek-harness"]}\n');
+  write('tools/ai-brain/token-tracker.js', 'module.exports = {};\n');
+  write('tools/semgrep/rules.yml', 'rules: []\n');
+  write('tools/openspec-check/run.sh', '#!/bin/sh\necho ok\n');
+  write('tools/k6/run-health-smoke.sh', '#!/bin/sh\necho k6\n');
+  write('tools/controller-eval/run.sh', '#!/bin/sh\necho eval\n');
+  write('scripts/verify-trivy.ts', "export const TRIVY_PINNED_VERSION = '0.69.3';\n");
+  write('scripts/ai/prepush-check.mjs', 'export default true;\n');
+  write('docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md', '# decisions\n');
+  write(
+    'scripts/ai/control.ps1',
+    [
+      '# control header',
+      'function Assert-ShipDeSupervisorCompatibility { Write-Host "ok" }',
+      'Assert-ShipDeJsonListCompatibility',
+      'switch ($Action) {',
+      '    "Test" { Write-Host "ALL SUPERVISOR AND AUTO-MERGE BEHAVIORAL TESTS PASSED"; return }',
+      '}',
+      '',
+    ].join('\n')
+  );
+  write('scripts/ai/ecosystem.ps1', '# ecosystem\n');
+  write('scripts/ai/check-no-hardcode.mjs', 'export default {};\n');
+  write('scripts/ai/hardcode-allowlist.json', '{"allow":[]}\n');
+  write(
+    'scripts/ai/hardcode-baseline.json',
+    JSON.stringify(
+      {
+        total: 2,
+        generatedAt: '2026-10-14T00:00:00Z',
+        violations: [
+          { file: 'scripts/ai/ecosystem.ps1', rule: 'MODEL_ID_LITERAL', matched: 'deepseek-harness' },
+          { file: 'tools/ai-brain/x.js', rule: 'MODEL_ID_LITERAL', matched: 'claude-code' },
+        ],
+      },
+      null,
+      2
+    ) + '\n'
+  );
+  write(
+    'apps/web/package.json',
+    JSON.stringify(
+      {
+        name: '@shipde/web',
+        scripts: { build: 'next build' },
+        dependencies: { next: '16.4.1', react: '19.0.0' },
+      },
+      null,
+      2
+    ) + '\n'
+  );
+  write(
+    'apps/api/package.json',
+    JSON.stringify(
+      {
+        name: '@shipde/api',
+        scripts: { build: 'nest build' },
+        dependencies: { '@nestjs/core': '11.0.0' },
+      },
+      null,
+      2
+    ) + '\n'
+  );
+  write(
+    'pnpm-lock.yaml',
+    [
+      "lockfileVersion: '9.0'",
+      'importers:',
+      '  apps/web:',
+      '    dependencies:',
+      '      next:',
+      '        specifier: 16.4.1',
+      '        version: 16.4.1',
+      '  apps/api:',
+      '    dependencies:',
+      "      '@nestjs/core':",
+      '        specifier: 11.0.0',
+      '        version: 11.0.0',
+      'packages:',
+      '  next@16.4.1:',
+      '    resolution: {integrity: sha512-oldhash==}',
+      '',
+    ].join('\n')
+  );
   write('tools/ai-brain/acceptance/ac-31-05-gate-rule.js', 'module.exports = {};\n');
   write('tools/ai-brain/acceptance/ac-31-03-live.js', 'module.exports = { live: true };\n');
   write('apps/web/src/components/SourceMatchingTab.tsx', 'export const Dead = () => null;\n');
   write('apps/web/src/components/LiveButton.tsx', 'export const Live = () => null;\n');
   write('apps/api/src/auth.ts', 'export const a = 1;\n');
-  write('.github/workflows/ci.yml', 'name: ci\n');
+  write('.github/workflows/ci.yml', 'name: ci\nsteps:\n  - run: bash tools/openspec-check/run.sh\n');
   g('add', '-A');
   g('commit', '-qm', 'base');
   const base = g('rev-parse', 'HEAD');
@@ -235,7 +341,7 @@ scenario('AC2: renaming a workflow into docs is Tier B (old path is protected)',
 });
 
 scenario('AC2: copying a workflow into docs is Tier B', (r) => {
-  r.write('docs/ci-copy.yml', 'name: ci\n');
+  r.write('docs/ci-copy.yml', fs.readFileSync(path.join(r.dir, '.github/workflows/ci.yml')));
   const res = r.run('docs: copy workflow', MAINTENANCE_BODY);
   // Copies are detected with their source path (--find-copies-harder); the protected source forces Tier B.
   assert.equal(res.status, 1);
@@ -552,14 +658,56 @@ scenario('v2 negative: Tier G fails without ## Preservation section', (r) => {
   assert.match(res.out, /missing or empty protected governance PR section: ## Preservation/);
 });
 
-scenario(
-  'v2: deleting declared dead web component and updating real inventory passes as Tier G',
-  (r) => {
-    r.remove('apps/web/src/components/SourceMatchingTab.tsx');
-    r.write('docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md', '# updated\n');
-    const res = r.run('chore(web): delete unused SourceMatchingTab', GOVERNANCE_BODY);
-    assert.equal(res.status, 0, res.out);
-    assert.match(res.out, /Tier G/);
+const V2_POLICY_FIXTURE = JSON.stringify(
+  {
+    version: 2,
+    description: 'v2 fixture',
+    maintenance_title_pattern: '^(chore|docs|refactor)(\\([a-z0-9._/-]+\\))?: \\S',
+    maintenance_body_headings: ['## Goal', '## Scope', '## Verification'],
+    governance_body_headings: ['## Goal', '## Scope', '## Preservation', '## Verification'],
+    maintenance_paths: ['docs/**', '*.md', '.evidence/**', 'tools/ai-brain/test/**'],
+    scoped_governance_rules: [
+      { path: 'AGENTS.md', kinds: ['M'] },
+      { path: 'docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md', kinds: ['M'] },
+      { path: 'tools/ai-brain/acceptance/ac-31-05-gate-rule.js', kinds: ['D'] },
+      { path: 'apps/web/src/components/SourceMatchingTab.tsx', kinds: ['D'] },
+    ],
+    protected_paths: [
+      '**/AGENTS.md',
+      '.github/**',
+      'apps/**',
+      'packages/**',
+      'prisma/**',
+      'scripts/**',
+      'docs/product-spec/docs/**',
+      'docs/product-spec/contracts/**',
+      'docs/product-spec/scripts/**',
+      'package.json',
+      'pnpm-lock.yaml',
+      '**/.env*',
+    ],
+    work_item_dir: 'docs/product-spec/work-items/',
+    register_path: REGISTER,
+    terminal_statuses: ['MERGED', 'SUPERSEDED'],
+  },
+  null,
+  2
+);
+
+test(
+  'v2: deleting declared dead web component and updating real inventory passes as Tier G on v2 base',
+  { skip: !python },
+  () => {
+    const r = makeRepo({ policyText: V2_POLICY_FIXTURE });
+    try {
+      r.remove('apps/web/src/components/SourceMatchingTab.tsx');
+      r.write('docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md', '# updated\n');
+      const res = r.run('chore(web): delete unused SourceMatchingTab', GOVERNANCE_BODY);
+      assert.equal(res.status, 0, res.out);
+      assert.match(res.out, /Tier G/);
+    } finally {
+      r.cleanup();
+    }
   }
 );
 
@@ -603,16 +751,22 @@ scenario(
   }
 );
 
-scenario(
-  'v2 negative: deleting a live acceptance script outside declared list stays Tier B',
-  (r) => {
-    r.remove('tools/ai-brain/acceptance/ac-31-03-live.js');
-    const res = r.run('chore(tools): delete live acceptance', GOVERNANCE_BODY);
-    assert.equal(res.status, 1);
-    assert.match(
-      res.out,
-      /Tier B: path outside maintenance scope: tools\/ai-brain\/acceptance\/ac-31-03-live\.js/
-    );
+test(
+  'v2 negative: deleting a live acceptance script outside declared list stays Tier B on v2 base',
+  { skip: !python },
+  () => {
+    const r = makeRepo({ policyText: V2_POLICY_FIXTURE });
+    try {
+      r.remove('tools/ai-brain/acceptance/ac-31-03-live.js');
+      const res = r.run('chore(tools): delete live acceptance', GOVERNANCE_BODY);
+      assert.equal(res.status, 1);
+      assert.match(
+        res.out,
+        /Tier B: path outside maintenance scope: tools\/ai-brain\/acceptance\/ac-31-03-live\.js/
+      );
+    } finally {
+      r.cleanup();
+    }
   }
 );
 
@@ -759,7 +913,7 @@ test(
       r.write('docs/notes.md', 'x\n');
       const res = r.run('docs: edit notes', MAINTENANCE_BODY);
       assert.equal(res.status, 1);
-      assert.match(res.out, /v2 requires non-empty scoped_governance_rules/);
+      assert.match(res.out, /v[23] requires non-empty scoped_governance_rules/);
     } finally {
       r.cleanup();
     }
@@ -791,13 +945,16 @@ test(
   'v2 negative: modifying policy/validator from v1 or v2 base stays strictly Tier B (no self-bootstrap)',
   { skip: !python },
   () => {
-    const v2Policy = JSON.parse(fs.readFileSync(path.join(repo, POLICY), 'utf8'));
-    const v1Policy = { ...v2Policy, version: 1 };
+    const v3Policy = JSON.parse(fs.readFileSync(path.join(repo, POLICY), 'utf8'));
+    const v1Policy = { ...v3Policy, version: 1 };
     delete v1Policy.scoped_governance_rules;
     delete v1Policy.governance_body_headings;
+    delete v1Policy.dependency_only_paths;
+    delete v1Policy.lockfile_path;
+    delete v1Policy.strict_protected_paths;
     const r = makeRepo({ policyText: JSON.stringify(v1Policy, null, 2) + '\n' });
     try {
-      r.write(POLICY, JSON.stringify(v2Policy, null, 2) + '\n');
+      r.write(POLICY, JSON.stringify(v3Policy, null, 2) + '\n');
       const res = r.run('chore(governance): attempt self-upgrade without WI', GOVERNANCE_BODY);
       assert.equal(res.status, 1, res.out);
       assert.match(
@@ -809,3 +966,215 @@ test(
     }
   }
 );
+
+// Governance v3: general maintenance/tooling/dependency-pin PR-only route without TASK-AI-* ceremony,
+// while preserving strict Tier B on product code, security/gate configs, and the contract itself.
+test(
+  'v3 transition: migrating v2 base to v3 head stays Tier B (refuses PR-only, passes with TASK-AI-238 addendum)',
+  { skip: !python },
+  () => {
+    const v3Policy = fs.readFileSync(path.join(repo, POLICY), 'utf8');
+    const r = makeRepo({ policyText: V2_POLICY_FIXTURE });
+    try {
+      r.write(POLICY, v3Policy);
+      r.write('docs/product-spec/work-items/TASK-AI-238.md', '# TASK-AI-238\n\n## Addendum v3\n');
+      const refused = r.run('chore(governance): upgrade to v3 without WI', GOVERNANCE_BODY);
+      assert.equal(refused.status, 1);
+      assert.match(refused.out, /Tier B/);
+      const passed = r.check(
+        '[TASK-AI-238] Upgrade PR contract to v3 maintenance route',
+        WORK_ITEM_BODY('TASK-AI-238')
+      );
+      assert.equal(passed.status, 0, passed.out);
+      assert.match(passed.out, /Tier B/);
+    } finally {
+      r.cleanup();
+    }
+  }
+);
+
+scenario('v3 preflight: DSH retirement (non-control files) with baseline shrink and manifest removal passes as Tier G', (r) => {
+  r.write('scripts/ai/ecosystem.ps1', '# ecosystem without dsh\n');
+  r.write(
+    'scripts/ai/hardcode-baseline.json',
+    JSON.stringify(
+      {
+        total: 1,
+        generatedAt: '2026-10-14T00:00:00Z',
+        violations: [{ file: 'tools/ai-brain/x.js', rule: 'MODEL_ID_LITERAL', matched: 'claude-code' }],
+      },
+      null,
+      2
+    ) + '\n'
+  );
+  const eco = JSON.parse(fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8'));
+  eco.adopted = eco.adopted.filter((x) => x.id !== 'deepseek-harness');
+  r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+  r.write('tools/ecosystem-profiles.json', '{"default":["semgrep"]}\n');
+  const res = r.run('chore(ai): retire deepseek-harness lane', GOVERNANCE_BODY);
+  assert.equal(res.status, 0, res.out);
+  assert.match(res.out, /Tier G/);
+});
+
+scenario('v3 preflight: AO/TokenTracker retirement under scripts/ and tools/ passes as Tier G', (r) => {
+  r.remove('tools/ai-brain/token-tracker.js');
+  r.write('scripts/ai/ecosystem.ps1', '# ecosystem without ao/token-tracker\n');
+  const res = r.run('chore(ai): retire token-tracker', GOVERNANCE_BODY);
+  assert.equal(res.status, 0, res.out);
+  assert.match(res.out, /Tier G/);
+});
+
+scenario('v3 negative: package.json and pnpm-lock.yaml stay Tier B in Slice 1', (r) => {
+  const webPkg = JSON.parse(fs.readFileSync(path.join(r.dir, 'apps/web/package.json'), 'utf8'));
+  webPkg.dependencies.next = '16.4.6';
+  r.write('apps/web/package.json', JSON.stringify(webPkg, null, 2) + '\n');
+  const res = r.run('fix(web): bump next', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: apps\/web\/package\.json/);
+});
+
+scenario('v3 negative: widening hardcode-baseline.json fails closed', (r) => {
+  const bl = JSON.parse(
+    fs.readFileSync(path.join(r.dir, 'scripts/ai/hardcode-baseline.json'), 'utf8')
+  );
+  bl.violations.push({ file: 'tools/ai-brain/new.js', rule: 'MODEL_ID_LITERAL', matched: 'gpt-5' });
+  bl.total = bl.violations.length;
+  r.write('scripts/ai/hardcode-baseline.json', JSON.stringify(bl, null, 2) + '\n');
+  const res = r.run('chore(ai): widen baseline', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /hardcode-baseline\.json must strictly shrink/);
+});
+
+scenario('v3 negative: baseline-only shrink without touching source file fails closed', (r) => {
+  r.write(
+    'scripts/ai/hardcode-baseline.json',
+    JSON.stringify(
+      {
+        total: 1,
+        generatedAt: '2026-10-14T00:00:00Z',
+        violations: [{ file: 'tools/ai-brain/x.js', rule: 'MODEL_ID_LITERAL', matched: 'claude-code' }],
+      },
+      null,
+      2
+    ) + '\n'
+  );
+  const res = r.run('chore(ai): shrink baseline without code edit', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /without modifying\/deleting source file: scripts\/ai\/ecosystem\.ps1/);
+});
+
+scenario('v3 negative: editing scripts/verify-trivy.ts stays Tier B', (r) => {
+  r.write('scripts/verify-trivy.ts', "export const TRIVY_PINNED_VERSION = '0.0.1';\n");
+  const res = r.run('chore(sec): edit trivy verifier', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: scripts\/verify-trivy\.ts/);
+});
+
+scenario('v3 negative: editing tools/openspec-check/run.sh stays Tier B', (r) => {
+  r.write('tools/openspec-check/run.sh', '#!/bin/sh\nexit 0\n');
+  const res = r.run('chore(ci): edit openspec check', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: tools\/openspec-check\/run\.sh/);
+});
+
+scenario('v3 negative: editing normative decision doc BASELINE-AND-DECISIONS.md stays Tier B', (r) => {
+  r.write('docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md', '# altered\n');
+  const res = r.run('docs: edit baseline decisions', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(
+    res.out,
+    /Tier B: protected path: docs\/product-spec\/docs\/00-control\/BASELINE-AND-DECISIONS\.md/
+  );
+});
+
+scenario('v3 negative: modifying top-level policies in ecosystem-manifest.json fails closed', (r) => {
+  const eco = JSON.parse(fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8'));
+  eco.policies.require_pinned_versions = false;
+  r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+  const res = r.run('chore(ai): relax ecosystem policies', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /cannot modify top-level fields in ecosystem-manifest\.json: \['policies'\]/);
+});
+
+scenario('v3 negative: removing CI-consumed NON_BLOCKING entry open-spec fails closed', (r) => {
+  const eco = JSON.parse(fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8'));
+  eco.adopted = eco.adopted.filter((x) => x.id !== 'open-spec');
+  r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+  const res = r.run('chore(ai): remove open-spec', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(
+    res.out,
+    /cannot remove blocking\/CI-consumed entry in ecosystem-manifest\.json: open-spec/
+  );
+});
+
+scenario('v3 negative: editing hardcode guard, allowlist or semgrep rules stays Tier B', (r) => {
+  r.write('scripts/ai/check-no-hardcode.mjs', 'export default { bypassed: true };\n');
+  const res = r.run('chore(ai): weaken guard', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: scripts\/ai\/check-no-hardcode\.mjs/);
+});
+
+scenario('v3 negative: editing tools/semgrep/ stays Tier B', (r) => {
+  r.write('tools/semgrep/rules.yml', 'rules: [disabled]\n');
+  const res = r.run('chore(sec): edit semgrep', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: tools\/semgrep\/rules\.yml/);
+});
+
+scenario('v3 negative: renaming auth or gate file into scripts/ stays Tier B', (r) => {
+  r.g('mv', 'apps/api/src/auth.ts', 'scripts/ai/auth.ts');
+  const res = r.run('chore(ai): move auth file', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: apps\/api\/src\/auth\.ts/);
+});
+
+scenario('v3 negative: removing BLOCKING_GATE entry from ecosystem-manifest.json fails closed', (r) => {
+  const eco = JSON.parse(fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8'));
+  eco.adopted = eco.adopted.filter((x) => x.id !== 'semgrep');
+  r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+  const res = r.run('chore(ai): remove semgrep gate', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(
+    res.out,
+    /cannot remove blocking\/CI-consumed entry in ecosystem-manifest\.json: semgrep/
+  );
+});
+
+scenario('v3 negative: editing scripts/ai/prepush-check.mjs stays Tier B', (r) => {
+  r.write('scripts/ai/prepush-check.mjs', 'export default false;\n');
+  const res = r.run('chore(ai): bypass prepush', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: scripts\/ai\/prepush-check\.mjs/);
+});
+
+scenario('v3 negative: editing tools/k6/run-health-smoke.sh stays Tier B', (r) => {
+  r.write('tools/k6/run-health-smoke.sh', '#!/bin/sh\nexit 0\n');
+  const res = r.run('chore(ci): bypass k6', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: tools\/k6\/run-health-smoke\.sh/);
+});
+
+scenario('v3 negative: editing tools/controller-eval/run.sh stays Tier B', (r) => {
+  r.write('tools/controller-eval/run.sh', '#!/bin/sh\nexit 0\n');
+  const res = r.run('chore(ci): bypass controller-eval', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: tools\/controller-eval\/run\.sh/);
+});
+
+scenario('v3 negative: deleting scripts/ai/control.ps1 stays Tier B', (r) => {
+  r.remove('scripts/ai/control.ps1');
+  const res = r.run('chore(ai): delete control.ps1', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: scripts\/ai\/control\.ps1/);
+});
+
+scenario('v3 negative: editing scripts/ai/control.ps1 stays Tier B (CI -Action Test gate)', (r) => {
+  const ctrl = fs
+    .readFileSync(path.join(r.dir, 'scripts/ai/control.ps1'), 'utf8')
+    .replace('# control header', 'return # early exit before startup assertions');
+  r.write('scripts/ai/control.ps1', ctrl);
+  const res = r.run('chore(ai): edit control.ps1', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: scripts\/ai\/control\.ps1/);
+});

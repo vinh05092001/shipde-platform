@@ -11,6 +11,7 @@ base policy only; the title, body and labels can never lower it.
 
 from __future__ import annotations
 
+from collections import Counter
 import argparse
 import csv
 import io
@@ -137,6 +138,7 @@ def matches(path: str, patterns: list[re.Pattern[str]]) -> bool:
 ALLOWED_SCOPED_KINDS = frozenset({"A", "M", "D"})
 TOOL_MANIFEST_PATH = "tools/ai-brain/data/tool-manifest.json"
 ECOSYSTEM_MANIFEST_PATH = "tools/ecosystem-manifest.json"
+HARDCODE_BASELINE_PATH = "scripts/ai/hardcode-baseline.json"
 ECOSYSTEM_PROTECTED_FIELDS = (
     "pinned_version_or_commit",
     "install_method",
@@ -160,20 +162,20 @@ def validate_policy_object(policy: dict, label: str = "base policy") -> dict:
     )
     missing = [key for key in required if key not in policy]
     version = policy.get("version")
-    if missing or version not in (1, 2):
+    if missing or version not in (1, 2, 3):
         raise ContractInputError(f"{label} is malformed (missing {missing or 'supported version'})")
     if version == 1:
-        # Strict v1 isolation: v1 base policies never interpret v2 scoped rules.
+        # Strict v1 isolation: v1 base policies never interpret v2/v3 scoped rules.
         if "scoped_governance_rules" in policy:
             raise ContractInputError(f"{label} v1 must not declare scoped_governance_rules")
         return policy
-    # Strict v2 schema validation
+    # Strict v2/v3 schema validation
     gov_headings = policy.get("governance_body_headings")
     if not isinstance(gov_headings, list) or not gov_headings or any(not isinstance(h, str) or not h.strip() for h in gov_headings):
-        raise ContractInputError(f"{label} v2 requires non-empty governance_body_headings")
+        raise ContractInputError(f"{label} v{version} requires non-empty governance_body_headings")
     rules = policy.get("scoped_governance_rules")
     if not isinstance(rules, list) or not rules:
-        raise ContractInputError(f"{label} v2 requires non-empty scoped_governance_rules")
+        raise ContractInputError(f"{label} v{version} requires non-empty scoped_governance_rules")
     for index, rule in enumerate(rules):
         if not isinstance(rule, dict):
             raise ContractInputError(f"{label} scoped_governance_rules[{index}] must be an object")
@@ -187,6 +189,10 @@ def validate_policy_object(policy: dict, label: str = "base policy") -> dict:
             or any(not isinstance(k, str) or k not in ALLOWED_SCOPED_KINDS for k in rule_kinds)
         ):
             raise ContractInputError(f"{label} scoped_governance_rules[{index}].kinds is invalid")
+    if version == 3:
+        val = policy.get("strict_protected_paths")
+        if not isinstance(val, list) or not val or any(not isinstance(x, str) or not x.strip() for x in val):
+            raise ContractInputError(f"{label} v3 requires non-empty strict_protected_paths")
     return policy
 
 
@@ -263,21 +269,27 @@ def classify(entries, policy) -> tuple[str, str]:
     """Return ('A'|'G'|'B', reason).
 
     - 'A': low-risk maintenance (PR-only evidence).
-    - 'G': protected scoped governance (PR-only evidence + preservation & invariant checks).
+    - 'G': protected scoped governance / tooling / dependency-pin maintenance (PR-only evidence + invariants).
     - 'B': Work Item + register required (product behavior, gates, undeclared paths).
     """
     if policy is None:
         return "B", "no contract policy at the base commit"
     if not entries:
         return "B", "empty diff"
+    version = policy.get("version")
     maintenance = [glob_to_regex(p) for p in policy["maintenance_paths"]]
     protected = [glob_to_regex(p) for p in policy["protected_paths"]]
+    strict_protected = (
+        [glob_to_regex(p) for p in policy.get("strict_protected_paths", [])]
+        if version == 3
+        else []
+    )
     scoped_rules = (
         [
             (glob_to_regex(rule["path"]), frozenset(rule["kinds"]))
             for rule in policy.get("scoped_governance_rules", [])
         ]
-        if policy.get("version") == 2
+        if version in (2, 3)
         else []
     )
     work_item_dir = policy["work_item_dir"]
@@ -286,6 +298,16 @@ def classify(entries, policy) -> tuple[str, str]:
     for kind, paths in entries:
         if kind == "T":
             return "B", f"type change: {paths[0]}"
+        if strict_protected:
+            for path in paths:
+                if matches(path, strict_protected):
+                    return "B", f"protected path: {path}"
+        if (
+            len(paths) == 1
+            and paths[0] == HARDCODE_BASELINE_PATH
+            and kind != "M"
+        ):
+            return "B", f"protected path: {paths[0]}"
         if (
             len(paths) == 1
             and paths[0] != register
@@ -329,9 +351,45 @@ def index_unique_entries(items, label: str) -> dict[str, dict]:
     return indexed
 
 
-def check_manifest_invariants(entries, base_rev: str, head_rev: str) -> list[str]:
+def workflow_texts_at(revision: str) -> str:
+    """Concatenate all .github/workflows/*.yml|*.yaml files at revision for CI consumer checks."""
+    probe = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", revision, ".github/workflows"],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if probe.returncode != 0:
+        return ""
+    chunks: list[str] = []
+    for rel in probe.stdout.splitlines():
+        rel = rel.strip()
+        if rel.endswith((".yml", ".yaml")):
+            content = show_at(revision, rel)
+            if content:
+                chunks.append(content)
+    return "\n".join(chunks)
+
+
+def is_ci_consumed_ecosystem_entry(item_id: str, entry: dict, workflow_corpus: str) -> bool:
+    if entry.get("blocking_policy") == "BLOCKING_GATE" or entry.get("install_method") == "ci-provisioned":
+        return True
+    if not workflow_corpus:
+        return False
+    corpus_lower = workflow_corpus.lower()
+    tokens = {item_id.lower(), item_id.lower().replace("-", "")}
+    for token in tokens:
+        if token and re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", corpus_lower):
+            return True
+    return False
+
+
+def check_manifest_invariants(entries, base_rev: str, head_rev: str, policy: dict | None = None) -> list[str]:
     """Protected manifest edits under Tier G must never alter CI pins, gates or installed flags."""
     errors: list[str] = []
+    version = (policy or {}).get("version", 2)
     changed = {p for _, paths in entries for p in paths}
     if TOOL_MANIFEST_PATH in changed:
         base_raw = show_at(base_rev, TOOL_MANIFEST_PATH)
@@ -371,12 +429,50 @@ def check_manifest_invariants(entries, base_rev: str, head_rev: str) -> list[str
             errors.append("scoped governance cannot modify product_dependencies in ecosystem-manifest.json")
         base_adopted = index_unique_entries(base_eco.get("adopted"), "base ecosystem-manifest.adopted")
         head_adopted = index_unique_entries(head_eco.get("adopted"), "head ecosystem-manifest.adopted")
-        index_unique_entries(base_eco.get("candidates", []), "base ecosystem-manifest.candidates")
-        index_unique_entries(head_eco.get("candidates", []), "head ecosystem-manifest.candidates")
-        if set(base_adopted) != set(head_adopted):
-            errors.append("scoped governance cannot add or remove adopted entries in ecosystem-manifest.json")
+        base_cand = index_unique_entries(base_eco.get("candidates", []), "base ecosystem-manifest.candidates")
+        head_cand = index_unique_entries(head_eco.get("candidates", []), "head ecosystem-manifest.candidates")
+        if version == 2:
+            if set(base_adopted) != set(head_adopted):
+                errors.append("scoped governance cannot add or remove adopted entries in ecosystem-manifest.json")
+            else:
+                for item_id, before in base_adopted.items():
+                    after = head_adopted[item_id]
+                    drift = [f for f in ECOSYSTEM_PROTECTED_FIELDS if before.get(f) != after.get(f)]
+                    if drift:
+                        errors.append(
+                            f"scoped governance cannot change protected ecosystem fields on {item_id}: {drift}"
+                        )
         else:
+            top_keys = (set(base_eco) | set(head_eco)) - {
+                "adopted",
+                "candidates",
+                "orchestrator_runtime",
+                "product_dependencies",
+            }
+            top_drift = sorted(k for k in top_keys if base_eco.get(k) != head_eco.get(k))
+            if top_drift:
+                errors.append(
+                    f"scoped governance cannot modify top-level fields in ecosystem-manifest.json: {top_drift}"
+                )
+            added_cand = sorted(set(head_cand) - set(base_cand))
+            if added_cand:
+                errors.append(f"scoped governance cannot add candidates in ecosystem-manifest.json: {added_cand}")
+            for cand_id, before in base_cand.items():
+                if cand_id in head_cand and head_cand[cand_id] != before:
+                    errors.append(
+                        f"scoped governance cannot mutate surviving candidate in ecosystem-manifest.json: {cand_id}"
+                    )
+            added = sorted(set(head_adopted) - set(base_adopted))
+            if added:
+                errors.append(f"scoped governance cannot add adopted entries in ecosystem-manifest.json: {added}")
+            wf_corpus = workflow_texts_at(base_rev)
             for item_id, before in base_adopted.items():
+                if item_id not in head_adopted:
+                    if is_ci_consumed_ecosystem_entry(item_id, before, wf_corpus):
+                        errors.append(
+                            f"scoped governance cannot remove blocking/CI-consumed entry in ecosystem-manifest.json: {item_id}"
+                        )
+                    continue
                 after = head_adopted[item_id]
                 drift = [f for f in ECOSYSTEM_PROTECTED_FIELDS if before.get(f) != after.get(f)]
                 if drift:
@@ -384,6 +480,73 @@ def check_manifest_invariants(entries, base_rev: str, head_rev: str) -> list[str
                         f"scoped governance cannot change protected ecosystem fields on {item_id}: {drift}"
                     )
     return errors
+
+
+def check_hardcode_baseline_invariant(entries, base_rev: str, head_rev: str) -> list[str]:
+    """Tier G edits to scripts/ai/hardcode-baseline.json must strictly shrink tied to changed source files."""
+    changed = {p for _, paths in entries for p in paths}
+    if HARDCODE_BASELINE_PATH not in changed:
+        return []
+    base_raw = show_at(base_rev, HARDCODE_BASELINE_PATH)
+    head_raw = show_at(head_rev, HARDCODE_BASELINE_PATH)
+    if base_raw is None or head_raw is None:
+        raise ContractInputError("hardcode-baseline.json unreadable for shrink invariant check")
+    try:
+        base_obj = json.loads(base_raw)
+        head_obj = json.loads(head_raw)
+    except json.JSONDecodeError as exc:
+        raise ContractInputError(f"hardcode-baseline.json is not valid JSON: {exc}") from exc
+    errors: list[str] = []
+    for label, obj in (("base", base_obj), ("head", head_obj)):
+        if (
+            not isinstance(obj, dict)
+            or not isinstance(obj.get("violations"), list)
+            or not isinstance(obj.get("total"), int)
+            or obj["total"] != len(obj["violations"])
+        ):
+            raise ContractInputError(f"{label} hardcode-baseline.json has invalid total or violations")
+    meta_keys = (set(base_obj) | set(head_obj)) - {"total", "violations"}
+    meta_drift = sorted(k for k in meta_keys if base_obj.get(k) != head_obj.get(k))
+    if meta_drift:
+        errors.append(f"hardcode-baseline.json metadata cannot change in Tier G: {meta_drift}")
+    if head_obj["total"] >= base_obj["total"]:
+        errors.append("hardcode-baseline.json must strictly shrink in Tier G (no baseline-only or widening edits)")
+        return errors
+
+    def canonical_counts(obj: dict) -> tuple[Counter, dict[str, dict]]:
+        counts: Counter = Counter()
+        sample: dict[str, dict] = {}
+        for idx, item in enumerate(obj["violations"]):
+            if not isinstance(item, dict):
+                raise ContractInputError(f"hardcode-baseline.json violations[{idx}] must be an object")
+            canon = json.dumps(item, sort_keys=True)
+            counts[canon] += 1
+            sample[canon] = item
+        return counts, sample
+
+    base_counts, base_samples = canonical_counts(base_obj)
+    head_counts, head_samples = canonical_counts(head_obj)
+    for canon, count in head_counts.items():
+        if count > base_counts.get(canon, 0):
+            item = head_samples[canon]
+            errors.append(
+                f"hardcode-baseline.json can only shrink unchanged rows in Tier G: altered/added {item.get('file')}"
+            )
+            return errors
+    touched_sources = {
+        paths[0].replace("\\", "/")
+        for kind, paths in entries
+        if kind in ("M", "D") and paths[0] != HARDCODE_BASELINE_PATH
+    }
+    for canon, count in base_counts.items():
+        if count > head_counts.get(canon, 0):
+            src_file = str(base_samples[canon].get("file", "")).replace("\\", "/")
+            if src_file not in touched_sources:
+                errors.append(
+                    f"hardcode-baseline.json removed entry without modifying/deleting source file: {src_file}"
+                )
+    return errors
+
 
 
 def common_checks(body: str, entries) -> list[str]:
@@ -522,7 +685,9 @@ def tier_g_checks(title, body, entries, policy, base_rev, head_rev) -> list[str]
             continue
         if not section_has_content(body, heading):
             errors.append(f"missing or empty protected governance PR section: {heading}")
-    errors.extend(check_manifest_invariants(entries, base_rev, head_rev))
+    errors.extend(check_manifest_invariants(entries, base_rev, head_rev, policy))
+    if policy.get("version") == 3:
+        errors.extend(check_hardcode_baseline_invariant(entries, base_rev, head_rev))
     return errors
 
 
