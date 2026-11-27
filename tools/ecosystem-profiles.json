@@ -270,11 +270,7 @@
         "repomix"
       ],
       "required_tools": ["shipde-platform", "git"],
-      "optional_services": [
-        "nine-router",
-        "chrome-devtools-mcp",
-        "playwright-mcp"
-      ],
+      "optional_services": ["nine-router", "chrome-devtools-mcp", "playwright-mcp"],
       "network_policy": "read-only-localhost",
       "concurrency_limits": {
         "max_implementation_agents": 0,
