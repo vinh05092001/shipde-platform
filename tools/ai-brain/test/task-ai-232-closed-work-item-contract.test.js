@@ -73,7 +73,14 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
       row(1, 'TASK-AI-1', 'MERGED', 'docs/product-spec/work-items/TASK-AI-1.md', '10', 'a1'),
       row(2, 'TASK-AI-2', 'SUPERSEDED', 'docs/product-spec/work-items/TASK-AI-2.md'),
       row(3, 'TASK-AI-3', 'READY_FOR_AUTHOR', 'docs/product-spec/work-items/TASK-AI-3.md'),
-      row(355, 'TASK-AI-238', 'MERGED', 'docs/product-spec/work-items/TASK-AI-238.md', '656', '58a42e8e'),
+      row(
+        355,
+        'TASK-AI-238',
+        'MERGED',
+        'docs/product-spec/work-items/TASK-AI-238.md',
+        '656',
+        '58a42e8e'
+      ),
     ].join('\n') + '\n'
   );
   for (const n of [1, 2, 3, 238])
@@ -187,7 +194,11 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
         total: 2,
         generatedAt: '2026-10-14T00:00:00Z',
         violations: [
-          { file: 'scripts/ai/ecosystem.ps1', rule: 'MODEL_ID_LITERAL', matched: 'deepseek-harness' },
+          {
+            file: 'scripts/ai/ecosystem.ps1',
+            rule: 'MODEL_ID_LITERAL',
+            matched: 'deepseek-harness',
+          },
           { file: 'tools/ai-brain/x.js', rule: 'MODEL_ID_LITERAL', matched: 'claude-code' },
         ],
       },
@@ -245,7 +256,10 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
   write('apps/web/src/components/SourceMatchingTab.tsx', 'export const Dead = () => null;\n');
   write('apps/web/src/components/LiveButton.tsx', 'export const Live = () => null;\n');
   write('apps/api/src/auth.ts', 'export const a = 1;\n');
-  write('.github/workflows/ci.yml', 'name: ci\nsteps:\n  - run: bash tools/openspec-check/run.sh\n');
+  write(
+    '.github/workflows/ci.yml',
+    'name: ci\nsteps:\n  - run: bash tools/openspec-check/run.sh\n'
+  );
   g('add', '-A');
   g('commit', '-qm', 'base');
   const base = g('rev-parse', 'HEAD');
@@ -993,36 +1007,46 @@ test(
   }
 );
 
-scenario('v3 preflight: DSH retirement (non-control files) with baseline shrink and manifest removal passes as Tier G', (r) => {
-  r.write('scripts/ai/ecosystem.ps1', '# ecosystem without dsh\n');
-  r.write(
-    'scripts/ai/hardcode-baseline.json',
-    JSON.stringify(
-      {
-        total: 1,
-        generatedAt: '2026-10-14T00:00:00Z',
-        violations: [{ file: 'tools/ai-brain/x.js', rule: 'MODEL_ID_LITERAL', matched: 'claude-code' }],
-      },
-      null,
-      2
-    ) + '\n'
-  );
-  const eco = JSON.parse(fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8'));
-  eco.adopted = eco.adopted.filter((x) => x.id !== 'deepseek-harness');
-  r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
-  r.write('tools/ecosystem-profiles.json', '{"default":["semgrep"]}\n');
-  const res = r.run('chore(ai): retire deepseek-harness lane', GOVERNANCE_BODY);
-  assert.equal(res.status, 0, res.out);
-  assert.match(res.out, /Tier G/);
-});
+scenario(
+  'v3 preflight: DSH retirement (non-control files) with baseline shrink and manifest removal passes as Tier G',
+  (r) => {
+    r.write('scripts/ai/ecosystem.ps1', '# ecosystem without dsh\n');
+    r.write(
+      'scripts/ai/hardcode-baseline.json',
+      JSON.stringify(
+        {
+          total: 1,
+          generatedAt: '2026-10-14T00:00:00Z',
+          violations: [
+            { file: 'tools/ai-brain/x.js', rule: 'MODEL_ID_LITERAL', matched: 'claude-code' },
+          ],
+        },
+        null,
+        2
+      ) + '\n'
+    );
+    const eco = JSON.parse(
+      fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8')
+    );
+    eco.adopted = eco.adopted.filter((x) => x.id !== 'deepseek-harness');
+    r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+    r.write('tools/ecosystem-profiles.json', '{"default":["semgrep"]}\n');
+    const res = r.run('chore(ai): retire deepseek-harness lane', GOVERNANCE_BODY);
+    assert.equal(res.status, 0, res.out);
+    assert.match(res.out, /Tier G/);
+  }
+);
 
-scenario('v3 preflight: AO/TokenTracker retirement under scripts/ and tools/ passes as Tier G', (r) => {
-  r.remove('tools/ai-brain/token-tracker.js');
-  r.write('scripts/ai/ecosystem.ps1', '# ecosystem without ao/token-tracker\n');
-  const res = r.run('chore(ai): retire token-tracker', GOVERNANCE_BODY);
-  assert.equal(res.status, 0, res.out);
-  assert.match(res.out, /Tier G/);
-});
+scenario(
+  'v3 preflight: AO/TokenTracker retirement under scripts/ and tools/ passes as Tier G',
+  (r) => {
+    r.remove('tools/ai-brain/token-tracker.js');
+    r.write('scripts/ai/ecosystem.ps1', '# ecosystem without ao/token-tracker\n');
+    const res = r.run('chore(ai): retire token-tracker', GOVERNANCE_BODY);
+    assert.equal(res.status, 0, res.out);
+    assert.match(res.out, /Tier G/);
+  }
+);
 
 scenario('v3 negative: package.json and pnpm-lock.yaml stay Tier B in Slice 1', (r) => {
   const webPkg = JSON.parse(fs.readFileSync(path.join(r.dir, 'apps/web/package.json'), 'utf8'));
@@ -1052,7 +1076,9 @@ scenario('v3 negative: baseline-only shrink without touching source file fails c
       {
         total: 1,
         generatedAt: '2026-10-14T00:00:00Z',
-        violations: [{ file: 'tools/ai-brain/x.js', rule: 'MODEL_ID_LITERAL', matched: 'claude-code' }],
+        violations: [
+          { file: 'tools/ai-brain/x.js', rule: 'MODEL_ID_LITERAL', matched: 'claude-code' },
+        ],
       },
       null,
       2
@@ -1077,27 +1103,40 @@ scenario('v3 negative: editing tools/openspec-check/run.sh stays Tier B', (r) =>
   assert.match(res.out, /Tier B: protected path: tools\/openspec-check\/run\.sh/);
 });
 
-scenario('v3 negative: editing normative decision doc BASELINE-AND-DECISIONS.md stays Tier B', (r) => {
-  r.write('docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md', '# altered\n');
-  const res = r.run('docs: edit baseline decisions', GOVERNANCE_BODY);
-  assert.equal(res.status, 1);
-  assert.match(
-    res.out,
-    /Tier B: protected path: docs\/product-spec\/docs\/00-control\/BASELINE-AND-DECISIONS\.md/
-  );
-});
+scenario(
+  'v3 negative: editing normative decision doc BASELINE-AND-DECISIONS.md stays Tier B',
+  (r) => {
+    r.write('docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md', '# altered\n');
+    const res = r.run('docs: edit baseline decisions', GOVERNANCE_BODY);
+    assert.equal(res.status, 1);
+    assert.match(
+      res.out,
+      /Tier B: protected path: docs\/product-spec\/docs\/00-control\/BASELINE-AND-DECISIONS\.md/
+    );
+  }
+);
 
-scenario('v3 negative: modifying top-level policies in ecosystem-manifest.json fails closed', (r) => {
-  const eco = JSON.parse(fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8'));
-  eco.policies.require_pinned_versions = false;
-  r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
-  const res = r.run('chore(ai): relax ecosystem policies', GOVERNANCE_BODY);
-  assert.equal(res.status, 1);
-  assert.match(res.out, /cannot modify top-level fields in ecosystem-manifest\.json: \['policies'\]/);
-});
+scenario(
+  'v3 negative: modifying top-level policies in ecosystem-manifest.json fails closed',
+  (r) => {
+    const eco = JSON.parse(
+      fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8')
+    );
+    eco.policies.require_pinned_versions = false;
+    r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+    const res = r.run('chore(ai): relax ecosystem policies', GOVERNANCE_BODY);
+    assert.equal(res.status, 1);
+    assert.match(
+      res.out,
+      /cannot modify top-level fields in ecosystem-manifest\.json: \['policies'\]/
+    );
+  }
+);
 
 scenario('v3 negative: removing CI-consumed NON_BLOCKING entry open-spec fails closed', (r) => {
-  const eco = JSON.parse(fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8'));
+  const eco = JSON.parse(
+    fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8')
+  );
   eco.adopted = eco.adopted.filter((x) => x.id !== 'open-spec');
   r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
   const res = r.run('chore(ai): remove open-spec', GOVERNANCE_BODY);
@@ -1129,17 +1168,22 @@ scenario('v3 negative: renaming auth or gate file into scripts/ stays Tier B', (
   assert.match(res.out, /Tier B: protected path: apps\/api\/src\/auth\.ts/);
 });
 
-scenario('v3 negative: removing BLOCKING_GATE entry from ecosystem-manifest.json fails closed', (r) => {
-  const eco = JSON.parse(fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8'));
-  eco.adopted = eco.adopted.filter((x) => x.id !== 'semgrep');
-  r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
-  const res = r.run('chore(ai): remove semgrep gate', GOVERNANCE_BODY);
-  assert.equal(res.status, 1);
-  assert.match(
-    res.out,
-    /cannot remove blocking\/CI-consumed entry in ecosystem-manifest\.json: semgrep/
-  );
-});
+scenario(
+  'v3 negative: removing BLOCKING_GATE entry from ecosystem-manifest.json fails closed',
+  (r) => {
+    const eco = JSON.parse(
+      fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8')
+    );
+    eco.adopted = eco.adopted.filter((x) => x.id !== 'semgrep');
+    r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+    const res = r.run('chore(ai): remove semgrep gate', GOVERNANCE_BODY);
+    assert.equal(res.status, 1);
+    assert.match(
+      res.out,
+      /cannot remove blocking\/CI-consumed entry in ecosystem-manifest\.json: semgrep/
+    );
+  }
+);
 
 scenario('v3 negative: editing scripts/ai/prepush-check.mjs stays Tier B', (r) => {
   r.write('scripts/ai/prepush-check.mjs', 'export default false;\n');
