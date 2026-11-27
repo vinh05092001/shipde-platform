@@ -262,7 +262,7 @@ The machine-readable source of truth is `tools/ecosystem-manifest.json`. The cat
 - MCP & Diagnostic: `ChromeDevTools/chrome-devtools-mcp`.
 - Testing & Quality Guidance: `vercel-labs/agent-skills`, `GoogleChrome/lighthouse-ci`, `storybookjs/storybook`, `mswjs/msw`, `openapi-ts/openapi-typescript`.
 - Knowledge & Specification: `Fission-AI/OpenSpec`, `github/spec-kit`, `gastownhall/beads`, `getnao/sylph`, `upstash/context7`, `NousResearch/hermes-agent`.
-- Security & Hygiene: `snyk/agent-scan`, `xiufengsun/TokenTracker`, `renovatebot/renovate`, `evilmartians/lefthook`.
+- Security & Hygiene: `snyk/agent-scan`, `renovatebot/renovate`, `evilmartians/lefthook`.
 - Development Toolkits: `oraios/serena`, `yamadashy/repomix`, `stoplightio/prism`.
 
 ### 3. Approved Additions (7)

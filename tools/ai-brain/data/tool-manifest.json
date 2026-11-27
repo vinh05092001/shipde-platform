@@ -399,17 +399,6 @@
     "evidenceRef": "package.json:devDependencies"
   },
   {
-    "id": "tokentracker",
-    "repo": "xiufengsun/tokentracker",
-    "purpose": "Token telemetry for before/after measurements",
-    "roles": ["analyst"],
-    "triggers": [],
-    "gate": false,
-    "command": null,
-    "installed": false,
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
-  },
-  {
     "id": "repomix",
     "repo": "yamadashy/repomix",
     "purpose": "Pack repository contents for sharing with reviewers and analysts",

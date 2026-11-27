@@ -176,7 +176,7 @@ The controller reads `tools/ecosystem-manifest.json` and activates only the gove
 | Review                   | Codex plus controller or governed review daemon                                  |
 | Multi-agent coordination | Beads plus governed mailbox capability                                           |
 | Security                 | Agent Scan                                                                       |
-| Cost                     | TokenTracker plus 9Router statistics                                             |
+| Cost                     | Internal usage adapter (`tools/ai-brain`) plus 9Router statistics                |
 | Maintenance              | Renovate plus Lefthook                                                           |
 
 This contract does not authorize installation of missing repositories or providers. If a named capability has no governed manifest entry, profile compilation stops fail-closed and reports the exact gap. The machine runs at most one implementation agent and one research agent, with one writer per Work Item.

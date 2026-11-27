@@ -45,7 +45,6 @@ const PACKAGE_ALIASES = {
   'opentelemetry-js': '@opentelemetry/api',
   'openapi-typescript': 'openapi-typescript',
   'axe-core': 'axe-core',
-  'token-tracker': 'tokentracker',
   msw: 'msw',
   storybook: 'storybook',
   lefthook: 'lefthook',
