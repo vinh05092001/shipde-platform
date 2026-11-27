@@ -15,11 +15,11 @@
 
 ## 2. Anti-AI-Slop operational UI rules
 
-1. **Start from a real end-to-end operational task** (e.g., *xử lý lô vận đơn lỗi*, *đối soát lệch COD*, *tạo khiếu nại có bằng chứng*) using domain-accurate Vietnamese copy — never generic SaaS boilerplate.
+1. **Start from a real end-to-end operational task** (e.g., _xử lý lô vận đơn lỗi_, _đối soát lệch COD_, _tạo khiếu nại có bằng chứng_) using domain-accurate Vietnamese copy — never generic SaaS boilerplate.
 2. **Every element must serve an action or clarify state.** Prohibited decorative noise unless explicitly specified:
    - No purple/indigo gradients, glowing blobs, or decorative glassmorphism.
    - No nested cards-inside-cards (separate regions with `1px` hairlines, 8px spacing rhythm, typography hierarchy, and data-dense tables).
-   - No emoji as navigation/bullet icons, no filler greetings (*"Chào mừng quay lại"*), no decorative micro-labels.
+   - No emoji as navigation/bullet icons, no filler greetings (_"Chào mừng quay lại"_), no decorative micro-labels.
 3. **Complete UI states per screen spec:** Every screen/table must handle `loading` (skeleton), `empty` (clear next action), `error` (what happened, whether data changed, next step), `data`, and `forbidden` / `partial` when specified.
 4. **Destructive or external carrier actions:** Always require a confirmation dialog stating exact scope (carrier, account, order, impact) and never emit a fake success toast before a real committed outcome.
 
