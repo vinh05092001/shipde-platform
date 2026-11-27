@@ -1,4 +1,4 @@
-﻿param(
+param(
     [ValidateSet("Menu", "Resume", "Status", "Prepare", "Start", "Review", "Sync", "Supervise", "Test")]
     [string]$Action = "Menu",
 
@@ -3306,29 +3306,19 @@ $script:AoRouterRuntimeFile = Join-Path $script:HandoffRoot "ao-router-runtime.j
 # SHIPDE_NINEROUTER_PROFILE override.
 $script:NineRouterProfile = Get-ShipDeNineRouterProfilePath -ProfilePath $NineRouterProfilePath
 $script:NineRouterPort = 20128
-$script:ExpectedAoVersion = Get-ShipDePinnedAoVersion -ManifestPath ([System.IO.Path]::Combine((Split-Path (Split-Path $PSScriptRoot -Parent) -Parent), "tools", "ecosystem-manifest.json"))
+$script:ExpectedAoVersion = "retired"
 $script:AoExecutablePath = $null
 
 function Assert-ShipDeAoCommand {
-    $script:AoExecutablePath = Resolve-ShipDeAoExecutable
-    return $script:AoExecutablePath
+    throw "Agent Orchestrator (AO) has been retired (TASK-AI-238 Addendum 4). Use the Controller (tools/ai-brain/cli.js) or Paseo lane."
 }
 
 function Get-ShipDeAoInvocationPath {
-    if ([string]::IsNullOrWhiteSpace([string]$script:AoExecutablePath)) {
-        $script:AoExecutablePath = Assert-ShipDeAoCommand
-    }
-    return $script:AoExecutablePath
+    throw "Agent Orchestrator (AO) has been retired (TASK-AI-238 Addendum 4). Use the Controller (tools/ai-brain/cli.js) or Paseo lane."
 }
 
 function Assert-ShipDeAoVersion {
-    $aoExecutable = Get-ShipDeAoInvocationPath
-    $probe = Get-ShipDeAoVersionProbe -AoExecutable $aoExecutable
-    return (Assert-ShipDeAoVersionEvidence `
-        -AoExecutable $aoExecutable `
-        -ExpectedVersion $script:ExpectedAoVersion `
-        -VersionText $probe.Text `
-        -VersionExitCode $probe.ExitCode)
+    throw "Agent Orchestrator (AO) has been retired (TASK-AI-238 Addendum 4). Use the Controller (tools/ai-brain/cli.js) or Paseo lane."
 }
 
 function Join-ShipDeNativeOutput {
@@ -3552,68 +3542,22 @@ function Assert-ShipDeAoRuntimeMarker {
 }
 
 function Assert-ShipDeNineRouterProfile {
-    $baseUrl = Assert-ShipDeNineRouterProfileBaseUrl `
+    $null = Assert-ShipDeNineRouterProfileBaseUrl `
         -ProfilePath $script:NineRouterProfile `
         -Port $script:NineRouterPort
     if (-not (Test-ShipDeNineRouterEndpoint -Port $script:NineRouterPort)) {
         throw "Port $($script:NineRouterPort) is not serving the expected local 9Router health and version contract."
     }
-    if (-not (Test-Path $script:AoRouterRuntimeFile)) {
-        throw "AO router runtime marker is missing. Start AO with scripts/ai/start-agent-orchestrator.ps1."
-    }
-    try {
-        $runtime = Get-Content $script:AoRouterRuntimeFile -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch {
-        throw "AO router runtime marker is malformed. Restart AO through the governed launcher."
-    }
-    Assert-ShipDeAoRuntimeMarker `
-        -Runtime $runtime `
-        -ExpectedProfile $script:NineRouterProfile `
-        -ExpectedBaseUrl $baseUrl `
-        -ExpectedVersion $script:ExpectedAoVersion `
-        -ExpectedExecutable (Get-ShipDeAoInvocationPath)
+    throw "Agent Orchestrator (AO) has been retired (TASK-AI-238 Addendum 4). Do not start ao.exe; use the Controller (tools/ai-brain/cli.js) or Paseo lane."
 }
 
 function Ensure-ShipDeNineRouterRuntime {
     param(
         [scriptblock]$ProfileValidator = { Assert-ShipDeNineRouterProfile },
         [scriptblock]$ReadinessResolver = { Test-ShipDeAoReadiness },
-        [scriptblock]$Launcher = {
-            param($Path, $Root, $Port, $Version, $ProfileDir)
-            # `-AgentRouterPort` is start-agent-orchestrator.ps1's parameter name (out of
-            # scope here); on that script it still addresses 9Router's local port (20128).
-            & $Path -AiRoot $Root -AgentRouterPort $Port -ExpectedAoVersion $Version -ProfilePath $ProfileDir -Restart
-        }
+        [scriptblock]$Launcher = $null
     )
-
-    try {
-        & $ProfileValidator
-        $readiness = & $ReadinessResolver
-        if ($readiness.Ready) {
-            return
-        }
-        throw $readiness.Reason
-    } catch {
-        Write-Warning ("AO is not ready through 9Router: {0}" -f $_.Exception.Message)
-    }
-
-    $launcherPath = Join-Path $PSScriptRoot "start-agent-orchestrator.ps1"
-    if (-not (Test-Path -LiteralPath $launcherPath)) {
-        throw "Governed AO launcher is missing: $launcherPath"
-    }
-
-    Write-Host "[SUPERVISOR] Starting AO through the 9Router Claude profile..."
-    try {
-        & $Launcher $launcherPath $AiRoot $script:NineRouterPort $script:ExpectedAoVersion $script:NineRouterProfile
-    } catch {
-        throw "The governed AO launcher failed: $($_.Exception.Message)"
-    }
-
-    & $ProfileValidator
-    $readiness = & $ReadinessResolver
-    if (-not $readiness.Ready) {
-        throw "AO is not ready after governed restart: $($readiness.Reason)"
-    }
+    throw "Agent Orchestrator (AO) has been retired (TASK-AI-238 Addendum 4). Do not start ao.exe; use the Controller (tools/ai-brain/cli.js) or Paseo lane."
 }
 
 function Get-ShipDeAoSessionById {
@@ -7455,408 +7399,19 @@ function Assert-ShipDeSupervisorCompatibility {
     }
 
     try {
-        $aoFixtureRoot = Join-Path (Get-ShipDeTempDir) "task-ai-06-ao-$([Guid]::NewGuid().ToString('N'))"
-        $aoFixturePath = Join-Path $aoFixtureRoot "agent-orchestrator\resources\daemon\ao.exe"
-        try {
-            New-Item -ItemType Directory -Path (Split-Path $aoFixturePath -Parent) -Force | Out-Null
-        New-Item -ItemType File -Path $aoFixturePath -Force | Out-Null
-
-        $resolvedCanonicalAo = Resolve-ShipDeAoExecutable `
-            -CommandResolver { return $null } `
-            -ProgramFilesRoot $aoFixtureRoot
-        if ($resolvedCanonicalAo -ne (Get-Item -LiteralPath $aoFixturePath).FullName) {
-            throw "AO PATH-absence canonical discovery compatibility test failed."
+        # Preserved 9Router profile isolation check (must never default to native ~/.claude)
+        $defaultProfile = Get-ShipDeNineRouterProfilePath
+        $nativeClaude = Join-Path (Get-ShipDeUserHome) ".claude"
+        if ([string]::Equals($defaultProfile, $nativeClaude, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "9Router profile isolation check failed: defaulted to native ~/.claude."
         }
-
-        $semanticEvidence = Assert-ShipDeAoVersionEvidence `
-            -AoExecutable $resolvedCanonicalAo `
-            -ExpectedVersion $script:ExpectedAoVersion `
-            -VersionText "ao version $($script:ExpectedAoVersion)+desktop.1" `
-            -ProgramFilesRoot $aoFixtureRoot `
-            -ProductVersionReader { throw "ProductVersion must not be consulted when AO returns semantic build metadata." }
-        if ($semanticEvidence.Source -ne "semantic-build-metadata" -or $semanticEvidence.EffectiveVersion -ne $script:ExpectedAoVersion) {
-            throw "AO semantic build metadata preference compatibility test failed."
-        }
-
-        $devEvidence = Assert-ShipDeAoVersionEvidence `
-            -AoExecutable $resolvedCanonicalAo `
-            -ExpectedVersion $script:ExpectedAoVersion `
-            -VersionText "ao version dev" `
-            -ProgramFilesRoot $aoFixtureRoot `
-            -ProductVersionReader { param($path) return $script:ExpectedAoVersion }
-        if ($devEvidence.Source -ne "windows-product-version" -or $devEvidence.BinaryVersion -ne $script:ExpectedAoVersion) {
-            throw "AO dev ProductVersion compatibility test failed."
-        }
-
-        $plainDevEvidence = Assert-ShipDeAoVersionEvidence `
-            -AoExecutable $resolvedCanonicalAo `
-            -ExpectedVersion $script:ExpectedAoVersion `
-            -VersionText "dev" `
-            -ProgramFilesRoot $aoFixtureRoot `
-            -ProductVersionReader { param($path) return $script:ExpectedAoVersion }
-        if ($plainDevEvidence.Source -ne "windows-product-version" -or $plainDevEvidence.BinaryVersion -ne $script:ExpectedAoVersion) {
-            throw "AO plain dev ProductVersion compatibility test failed."
-        }
-
-        $launcherScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") -Raw -Encoding UTF8
-        if ($launcherScript -match 'Start-Process\s+-FilePath\s+\$AoExecutable\b') {
-            throw "Production regression: start-agent-orchestrator.ps1 passes empty `$AoExecutable parameter instead of resolved `$aoExecutablePath to Start-Process."
-        }
-
-        # TASK-AI-06 behavioral bootstrap regression suite:
-        # Exercises start-agent-orchestrator.ps1 through injected seams (-ProcessStarter,
-        # -StatusProbe, -EndpointTester, -VersionProbe, -ProfilePath, -AiRoot) to verify:
-        # 1. Manifest pin bypass prevention: contradicting ExpectedAoVersion is rejected fail-closed.
-        # 2. Pre-creation failure & original error preservation: launcher preserves original error and cleans up.
-        # 3. Early process exit detection: detects exited process and records exit code without leaving marker.
-        # 4. Successful startup & live process marker binding: binds verified live daemon identity.
-        $behavioralTestRoot = Join-Path (Get-ShipDeTempDir) "task-ai-06-behavioral-$([Guid]::NewGuid().ToString('N'))"
-        $behavioralAiRoot = Join-Path $behavioralTestRoot "AI"
-        $behavioralProfile = Join-Path $behavioralTestRoot ".claude"
-        $behavioralSettings = Join-Path $behavioralProfile "settings.json"
-        $behavioralMarker = Join-Path $behavioralAiRoot "handoff\ao-router-runtime.json"
-        $savedClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
-        $savedAnthropicBaseUrl = $env:ANTHROPIC_BASE_URL
-        $savedAnthropicAuthToken = $env:ANTHROPIC_AUTH_TOKEN
-        $savedAnthropicApiKey = $env:ANTHROPIC_API_KEY
-        try {
-            New-Item -ItemType Directory -Path $behavioralProfile -Force | Out-Null
-            Set-Content -Path $behavioralSettings -Value '{"env":{"ANTHROPIC_BASE_URL":"http://localhost:20128/v1"}}' -Encoding UTF8
-
-            # 0a. The AO profile default must never be the operator's native ~/.claude.
-            $savedProfileOverride = $env:SHIPDE_NINEROUTER_PROFILE
-            try {
-                Remove-Item Env:SHIPDE_NINEROUTER_PROFILE -ErrorAction SilentlyContinue
-                $defaultProfile = Get-ShipDeNineRouterProfilePath
-                $nativeProfile = Join-Path (Get-ShipDeUserHome) ".claude"
-                if ([StringComparer]::OrdinalIgnoreCase.Equals([string]$defaultProfile, [string]$nativeProfile)) {
-                    throw "AO profile split regression: the default 9Router profile is the native Claude Code profile $nativeProfile."
-                }
-                if ([string]::IsNullOrWhiteSpace($defaultProfile)) {
-                    throw "AO profile split regression: the default 9Router profile path is empty."
-                }
-                $overrideProbe = Join-Path $behavioralTestRoot "override-profile"
-                $env:SHIPDE_NINEROUTER_PROFILE = $overrideProbe
-                if ((Get-ShipDeNineRouterProfilePath) -ne $overrideProbe) {
-                    throw "AO profile split regression: SHIPDE_NINEROUTER_PROFILE did not override the default profile path."
-                }
-                if ((Get-ShipDeNineRouterProfilePath -ProfilePath $behavioralProfile) -ne $behavioralProfile) {
-                    throw "AO profile split regression: an explicit profile path did not win over the environment override."
-                }
-            } finally {
-                if (-not [string]::IsNullOrWhiteSpace($savedProfileOverride)) {
-                    $env:SHIPDE_NINEROUTER_PROFILE = $savedProfileOverride
-                } else {
-                    Remove-Item Env:SHIPDE_NINEROUTER_PROFILE -ErrorAction SilentlyContinue
-                }
-            }
-
-            # 0b. A profile without an 'env' block must produce an actionable error that
-            # names the profile file, never a raw PowerShell property-not-found error.
-            $envlessProfile = Join-Path $behavioralTestRoot "envless-profile"
-            $envlessSettings = Join-Path $envlessProfile "settings.json"
-            New-Item -ItemType Directory -Path $envlessProfile -Force | Out-Null
-            Set-Content -Path $envlessSettings -Value '{"model":"opus"}' -Encoding UTF8
-            $envlessMessage = ""
-            try {
-                & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
-                    -ProfilePath $envlessProfile `
-                    -AiRoot $behavioralAiRoot
-            } catch {
-                $envlessMessage = [string]$_.Exception.Message
-            }
-            if ($envlessMessage -match "cannot be found on this object") {
-                throw "AO bootstrap behavioral regression: a profile without an 'env' block produced a raw property error: $envlessMessage"
-            }
-            if ($envlessMessage -notlike "*$envlessSettings*" -or $envlessMessage -notmatch "env" -or $envlessMessage -notmatch "ANTHROPIC_BASE_URL") {
-                throw "AO bootstrap behavioral regression: a profile without an 'env' block did not raise an actionable error naming the profile file. Got: $envlessMessage"
-            }
-
-            # 1. Manifest bypass prevention
-            $manifestBypassCaught = $false
-            try {
-                & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
-                    -ExpectedAoVersion "0.12.99" `
-                    -ProfilePath $behavioralProfile `
-                    -AiRoot $behavioralAiRoot
-            } catch {
-                $manifestBypassCaught = $_.Exception.Message -match "contradicts canonical manifest pin"
-            }
-            if (-not $manifestBypassCaught) {
-                throw "AO bootstrap behavioral regression: caller-supplied ExpectedAoVersion contradicting manifest pin was not rejected."
-            }
-
-            # 2. Pre-creation failure & original error preservation
-            $preCreationCaught = $false
-            try {
-                & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
-                    -AoExecutable $aoFixturePath `
-                    -ProfilePath $behavioralProfile `
-                    -AiRoot $behavioralAiRoot `
-                    -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
-                    -EndpointTester { return $true } `
-                    -ExistingProcessResolver { param($p) return @() } `
-                    -ProcessStarter { param($p, $a) throw "Simulated pre-creation failure: process cannot be spawned" }
-            } catch {
-                $preCreationCaught = $_.Exception.Message -match "Simulated pre-creation failure: process cannot be spawned"
-            }
-            if (-not $preCreationCaught) {
-                throw "AO bootstrap behavioral regression: pre-creation failure did not preserve original error."
-            }
-            if (Test-Path -LiteralPath $behavioralMarker) {
-                throw "AO bootstrap behavioral regression: runtime marker was created despite pre-creation failure."
-            }
-
-            # 3. Early process exit detection and cleanup
-            $earlyExitCaught = $false
-            try {
-                & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
-                    -AoExecutable $aoFixturePath `
-                    -ProfilePath $behavioralProfile `
-                    -AiRoot $behavioralAiRoot `
-                    -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
-                    -EndpointTester { return $true } `
-                    -ExistingProcessResolver { param($p) return @() } `
-                    -ProcessStarter { param($p, $a) return [PSCustomObject]@{ Id = 71099; HasExited = $true; ExitCode = 42; Path = $p; ProcessName = "ao"; StartTime = (Get-Date) } } `
-                    -StatusProbe { param($p) return @() } `
-                    -StartupTimeoutSeconds 2
-            } catch {
-                $earlyExitCaught = $_.Exception.Message -match "Agent Orchestrator exited during startup with code 42"
-            }
-            if (-not $earlyExitCaught) {
-                throw "AO bootstrap behavioral regression: early process exit was not detected with exit code."
-            }
-            if (Test-Path -LiteralPath $behavioralMarker) {
-                throw "AO bootstrap behavioral regression: runtime marker was left behind after early exit."
-            }
-
-            # 4. Successful startup and live daemon identity marker binding
-            $liveStartTime = (Get-Date).ToUniversalTime().AddSeconds(-5)
-            & (Join-Path $PSScriptRoot "start-agent-orchestrator.ps1") `
-                -AoExecutable $aoFixturePath `
-                -ProfilePath $behavioralProfile `
-                -AiRoot $behavioralAiRoot `
-                -VersionProbe { param($p) return [PSCustomObject]@{ Text = "ao version $script:ExpectedAoVersion"; ExitCode = 0 } } `
-                -EndpointTester { return $true } `
-                -ExistingProcessResolver { param($p) return @() } `
-                -ProcessStarter { param($p, $a) return [PSCustomObject]@{ Id = 71100; HasExited = $false; Path = $p; ProcessName = "ao"; StartTime = $liveStartTime } } `
-                -StatusProbe { param($p) return '{"state":"ready"}' } 6>$null
-
-            if (-not (Test-Path -LiteralPath $behavioralMarker)) {
-                throw "AO bootstrap behavioral regression: runtime marker was not created on successful launch."
-            }
-            $writtenMarker = Get-Content -LiteralPath $behavioralMarker -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($writtenMarker.marker_version -ne 2 -or
-                $writtenMarker.process_id -ne 71100 -or
-                $writtenMarker.ao_version -ne $script:ExpectedAoVersion -or
-                $writtenMarker.ao_executable -ne (Get-Item -LiteralPath $aoFixturePath).FullName -or
-                $writtenMarker.base_url -ne "http://localhost:20128/v1") {
-                throw "AO bootstrap behavioral regression: written marker properties did not bind to verified daemon identity."
-            }
-        } finally {
-            if ($null -ne $savedClaudeConfigDir) { $env:CLAUDE_CONFIG_DIR = $savedClaudeConfigDir } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
-            if ($null -ne $savedAnthropicBaseUrl) { $env:ANTHROPIC_BASE_URL = $savedAnthropicBaseUrl } else { Remove-Item Env:ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue }
-            if ($null -ne $savedAnthropicAuthToken) { $env:ANTHROPIC_AUTH_TOKEN = $savedAnthropicAuthToken } else { Remove-Item Env:ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue }
-            if ($null -ne $savedAnthropicApiKey) { $env:ANTHROPIC_API_KEY = $savedAnthropicApiKey } else { Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue }
-            if (Test-Path -LiteralPath $behavioralTestRoot) {
-                Remove-Item -LiteralPath $behavioralTestRoot -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
-
-        if ($env:CLAUDE_CONFIG_DIR -ne $savedClaudeConfigDir) {
-            throw "AO bootstrap behavioral regression: CLAUDE_CONFIG_DIR was not restored after self-tests."
-        }
-        if ($env:ANTHROPIC_BASE_URL -ne $savedAnthropicBaseUrl) {
-            throw "AO bootstrap behavioral regression: ANTHROPIC_BASE_URL was not restored after self-tests."
-        }
-        if ($env:ANTHROPIC_AUTH_TOKEN -ne $savedAnthropicAuthToken) {
-            throw "AO bootstrap behavioral regression: ANTHROPIC_AUTH_TOKEN was not restored after self-tests."
-        }
-        if ($env:ANTHROPIC_API_KEY -ne $savedAnthropicApiKey) {
-            throw "AO bootstrap behavioral regression: ANTHROPIC_API_KEY was not restored after self-tests."
-        }
-
-        $bootstrapExecutable = Join-Path (Get-ShipDeTempDir) "task-ai-06-ao-marker-$([Guid]::NewGuid().ToString('N'))\ao.exe"
-        $bootstrapStartTime = (Get-Date).ToUniversalTime().AddMinutes(-1)
-        $bootstrapProcess = [PSCustomObject]@{
-            Id = 61006
-            HasExited = $false
-            ProcessName = "ao"
-            Path = $bootstrapExecutable
-            StartTime = $bootstrapStartTime
-        }
-        $bootstrapMarker = [PSCustomObject]@{
-            marker_version = 2
-            process_id = $bootstrapProcess.Id
-            process_name = $bootstrapProcess.ProcessName
-            process_path = $bootstrapProcess.Path
-            process_start_time = $bootstrapStartTime.ToString("o")
-            profile = "C:\fixture\.claude"
-            base_url = "http://localhost:20128/v1"
-            ao_version = $script:ExpectedAoVersion
-            ao_binary_version = $null
-            ao_version_source = "semantic-build-metadata"
-            ao_executable = $bootstrapExecutable
-            credential_overrides_cleared = @("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
-            started_at = (Get-Date).ToUniversalTime().ToString("o")
-        }
-        Assert-ShipDeAoRuntimeMarker `
-            -Runtime $bootstrapMarker `
-            -ExpectedProfile "C:\fixture\.claude" `
-            -ExpectedBaseUrl "http://localhost:20128/v1" `
-            -ExpectedVersion $script:ExpectedAoVersion `
-            -ExpectedExecutable $bootstrapExecutable `
-            -ProcessResolver { param($id) $bootstrapProcess }
-
-        $staleMarkerRejected = $false
-        try {
-            $staleProcess = [PSCustomObject]@{
-                Id = $bootstrapProcess.Id
-                HasExited = $false
-                ProcessName = "ao"
-                Path = "$bootstrapExecutable.stale"
-                StartTime = $bootstrapStartTime
-            }
-            Assert-ShipDeAoRuntimeMarker `
-                -Runtime $bootstrapMarker `
-                -ExpectedProfile "C:\fixture\.claude" `
-                -ExpectedBaseUrl "http://localhost:20128/v1" `
-                -ExpectedVersion $script:ExpectedAoVersion `
-                -ExpectedExecutable $bootstrapExecutable `
-                -ProcessResolver { param($id) $staleProcess } | Out-Null
-        } catch {
-            $staleMarkerRejected = $_.Exception.Message -match "identity cannot be verified"
-        }
-        if (-not $staleMarkerRejected) {
-            throw "AO bootstrap regression: a live AO with a stale marker was accepted."
-        }
-
-        $duplicateLaunches = @{ Count = 0 }
-        Ensure-ShipDeNineRouterRuntime `
-            -ProfileValidator { } `
-            -ReadinessResolver { return @{ Ready = $true } } `
-            -Launcher { $duplicateLaunches.Count++ }
-        if ($duplicateLaunches.Count -ne 0) {
-            throw "AO bootstrap regression: a governed ready AO would be launched a second time."
-        }
-
-        $mismatchedProductVersionRejected = $false
-        try {
-            Assert-ShipDeAoVersionEvidence `
-                -AoExecutable $resolvedCanonicalAo `
-                -ExpectedVersion $script:ExpectedAoVersion `
-                -VersionText "ao version dev" `
-                -ProgramFilesRoot $aoFixtureRoot `
-                -ProductVersionReader { param($path) return "0.12.11" } | Out-Null
-        } catch {
-            $mismatchedProductVersionRejected = $true
-        }
-        if (-not $mismatchedProductVersionRejected) {
-            throw "AO mismatched ProductVersion fail-closed compatibility test failed."
-        }
-
-        $unverifiableVersionRejected = $false
-        try {
-            Assert-ShipDeAoVersionEvidence `
-                -AoExecutable $resolvedCanonicalAo `
-                -ExpectedVersion $script:ExpectedAoVersion `
-                -VersionText "ao version dev" `
-                -ProgramFilesRoot $aoFixtureRoot `
-                -ProductVersionReader { param($path) return "not-a-version" } | Out-Null
-        } catch {
-            $unverifiableVersionRejected = $true
-        }
-        if (-not $unverifiableVersionRejected) {
-            throw "AO malformed ProductVersion fail-closed compatibility test failed."
-        }
-
-        $missingProductVersionRejected = $false
-        try {
-            Assert-ShipDeAoVersionEvidence `
-                -AoExecutable $resolvedCanonicalAo `
-                -ExpectedVersion $script:ExpectedAoVersion `
-                -VersionText "ao version dev" `
-                -ProgramFilesRoot $aoFixtureRoot `
-                -ProductVersionReader { param($path) return "" } | Out-Null
-        } catch {
-            $missingProductVersionRejected = $true
-        }
-        if (-not $missingProductVersionRejected) {
-            throw "AO missing ProductVersion fail-closed compatibility test failed."
-        }
-
-        $missingVersionRejected = $false
-        try {
-            Assert-ShipDeAoVersionEvidence `
-                -AoExecutable $resolvedCanonicalAo `
-                -ExpectedVersion $script:ExpectedAoVersion `
-                -VersionText "" `
-                -ProgramFilesRoot $aoFixtureRoot | Out-Null
-        } catch {
-            $missingVersionRejected = $true
-        }
-        if (-not $missingVersionRejected) {
-            throw "AO missing version fail-closed compatibility test failed."
-        }
-
-        $versionRangeRejected = $false
-        try {
-            Assert-ShipDeAoVersionEvidence `
-                -AoExecutable $resolvedCanonicalAo `
-                -ExpectedVersion "^$($script:ExpectedAoVersion)" `
-                -VersionText "ao version $($script:ExpectedAoVersion)" `
-                -ProgramFilesRoot $aoFixtureRoot | Out-Null
-        } catch {
-            $versionRangeRejected = $true
-        }
-        if (-not $versionRangeRejected) {
-            throw "AO version range fail-closed compatibility test failed."
-        }
-
-        # Derived from the pin so the fixture stays newer than whatever is
-        # pinned. A literal went stale when the pin moved past it: 0.12.99 is
-        # older than 0.13.0, so the test stopped proving what its name says.
-        $pinParts = @($script:ExpectedAoVersion.Split('.') | ForEach-Object { [int]$_ })
-        $newerThanPin = "{0}.{1}.0" -f $pinParts[0], ($pinParts[1] + 1)
-        $olderThanPin = "{0}.{1}.99" -f $pinParts[0], ($pinParts[1] - 1)
-
-        $olderVersionRejected = $false
-        try {
-            Assert-ShipDeAoVersionEvidence `
-                -AoExecutable $resolvedCanonicalAo `
-                -ExpectedVersion $script:ExpectedAoVersion `
-                -VersionText "ao version $olderThanPin" `
-                -ProgramFilesRoot $aoFixtureRoot | Out-Null
-        } catch {
-            $olderVersionRejected = $true
-        }
-        if (-not $olderVersionRejected) {
-            throw "AO older version fail-closed compatibility test failed."
-        }
-
-        $newerVersionRejected = $false
-        try {
-            Assert-ShipDeAoVersionEvidence `
-                -AoExecutable $resolvedCanonicalAo `
-                -ExpectedVersion $script:ExpectedAoVersion `
-                -VersionText "ao version $newerThanPin" `
-                -ProgramFilesRoot $aoFixtureRoot | Out-Null
-        } catch {
-            $newerVersionRejected = $true
-        }
-        if (-not $newerVersionRejected) {
-            throw "AO newer version fail-closed compatibility test failed."
-        }
-
-        $canonicalPinned = Get-ShipDePinnedAoVersion
-        if ($canonicalPinned -ne "0.13.0" -or $canonicalPinned -ne $script:ExpectedAoVersion) {
-            throw "Canonical pinned AO version test failed: expected 0.13.0, got $canonicalPinned"
-        }
-    } finally {
-        if (Test-Path -LiteralPath $aoFixtureRoot) {
-            Remove-Item -LiteralPath $aoFixtureRoot -Recurse -Force
-        }
-    }
+        # Explicit AO retirement fail-closed assertions (TASK-AI-238 Addendum 4)
+        $aoCmdRetired = $false
+        try { $null = Assert-ShipDeAoCommand } catch { if ($_.Exception.Message -match "retired") { $aoCmdRetired = $true } }
+        if (-not $aoCmdRetired) { throw "Assert-ShipDeAoCommand did not fail-closed with retired error." }
+        $aoRuntimeRetired = $false
+        try { Ensure-ShipDeNineRouterRuntime } catch { if ($_.Exception.Message -match "retired") { $aoRuntimeRetired = $true } }
+        if (-not $aoRuntimeRetired) { throw "Ensure-ShipDeNineRouterRuntime did not fail-closed with retired error." }
 
     $plain = ConvertFrom-ShipDeAoJson -Json '{"id":"ao-1"}' -Operation "self-test"
     if ((Get-ShipDeAoSessionId -Response $plain) -ne "ao-1") {
@@ -16402,110 +15957,9 @@ function Invoke-ShipDeSupervise {
         [switch]$DryRun
     )
 
-    Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR"
-
-    # TASK-AI-11: Preview/dry-run surface — emit banners and skip mutating
-    # operations when either flag is active.
-    if ($Preview) {
-        Write-Host "[PREVIEW] Supervisor will preview actions without executing them."
-    }
-    if ($DryRun) {
-        Write-Host "[SUPERVISOR][DRY-RUN] Supervisor will emit commands without executing them."
-    }
-
-    # TASK-AI-11: Preview/DryRun early return — when either flag is set,
-    # emit the banner above and return without performing mutating operations.
-    if ($Preview -or $DryRun) {
-        Write-Host "[PREVIEW] No mutating operations will be executed. Exiting preview/dry-run mode."
-        return "PREVIEW"
-    }
-
-    Assert-ShipDeSupervisorMaxNudges -MaxNudges $SupervisorMaxNudges
-
-    # Finding 3: Acquire exclusive supervisor lock BEFORE any stateful startup operations
-    # (AO restart, checkpoint initialization, Codex parking, worker spawning)
-    Assert-ShipDeSupervisorLock -WorkItemId ""
-    try {
-        Assert-ShipDeAoCommand
-        Assert-ShipDeAoVersion
-        Ensure-ShipDeNineRouterRuntime
-
-        $syncScript = { param($s) Sync-ShipDeRegisterAfterAutoMerge -State $s -Repository $Repository }
-
-        $state = Read-ShipDeSupervisorCheckpoint
-        $state = Initialize-ShipDeSupervisorState -State $state -PullRequestNumber $PullRequestNumber -Repository $Repository -RegisterSynchronizer $syncScript -MaxRecoveryAttempts $MaxRecoveryAttempts
-        if ($null -eq $state) {
-            return
-        }
-
-        if ([string]$state.State -eq "CORE_COMPLETE") {
-            Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
-            return "CORE_COMPLETE"
-        }
-
-        Update-ShipDeSupervisorLock -WorkItemId ([string]$state.WorkItemId)
-
-        # Crash recovery for pending merge intent (Rule AI-MERGE-10, AI-MERGE-11, AC-AI-13-17)
-        if ($state.State -in @("MERGE_INTENT_PERSISTED", "MERGE_RECONCILING") -or $null -ne $state.MergeIntent) {
-            $state = Reconcile-ShipDeMergeIntent -State $state -Repository $Repository -RegisterSynchronizer $syncScript
-            if ($state.State -eq "MERGED") {
-                Write-Host ("[SUPERVISOR] Reconciled pending merge intent: PR #{0} confirmed MERGED." -f $state.PullRequestNumber)
-                Sync-ShipDeRegisterAfterAutoMerge -State $state -Repository $Repository
-                if (Test-ShipDeCoreComplete) {
-                    $hasOpenRecPr = $false
-                    try {
-                        $openPrsAfterMerge = @(Get-ShipDeOpenPullRequests)
-                        $hasOpenRecPr = @($openPrsAfterMerge | Where-Object { Test-ShipDeReconciliationPullRequest -PullRequest $_ -HandoffRoot $script:HandoffRoot -Repository $Repository }).Count -gt 0
-                    } catch {}
-                    if (-not $hasOpenRecPr) {
-                        Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
-                        $state.State = "CORE_COMPLETE"
-                        Write-ShipDeSupervisorCheckpoint -State $state
-                        return "CORE_COMPLETE"
-                    }
-                }
-                Clear-ShipDeSupervisorCheckpoint
-                return "MERGED"
-            }
-        }
-
-        $result = Invoke-ShipDeSupervisorLoop -State $state -PollIntervalSeconds $SupervisorPollIntervalSeconds -InactivityTimeoutMinutes $SupervisorInactivityTimeoutMinutes -MaxNudges $SupervisorMaxNudges -ReviewTimeoutMinutes $SupervisorReviewTimeoutMinutes -MaxFailovers $MaxFailovers
-
-        if ($result -eq "READY_FOR_HUMAN_MERGE") {
-            Write-Host ("[SUPERVISOR] PR #{0} at {1} has CI GREEN and durable exact-HEAD Codex PASS." -f $state.PullRequestNumber, $state.HeadSha)
-            # Check if this is the bootstrap PR TASK-AI-13
-            $isRecState = [bool](Get-ShipDeObjectProperty -Object $state -Names @("IsReconciliation", "isReconciliation"))
-            if ($state.WorkItemId -eq "TASK-AI-13" -and -not $isRecState) {
-                Write-Host "[SUPERVISOR] Human merge is required for bootstrap PR TASK-AI-13. No automatic merge was attempted."
-                return "READY_FOR_HUMAN_MERGE"
-            }
-            Write-Host "[SUPERVISOR] Initiating governed exact-HEAD auto-merge..."
-            $mergeResult = Invoke-ShipDeAutoMerge -State $state -Repository $Repository -RegisterSynchronizer $syncScript
-            if ($mergeResult -eq "MERGED") {
-                Write-Host ("[SUPERVISOR] PR #{0} successfully auto-merged." -f $state.PullRequestNumber)
-                Sync-ShipDeRegisterAfterAutoMerge -State $state -Repository $Repository
-                if (Test-ShipDeCoreComplete) {
-                    $hasOpenRecPr = $false
-                    try {
-                        $openPrsAfterMerge = @(Get-ShipDeOpenPullRequests)
-                        $hasOpenRecPr = @($openPrsAfterMerge | Where-Object { Test-ShipDeReconciliationPullRequest -PullRequest $_ -HandoffRoot $script:HandoffRoot -Repository $Repository }).Count -gt 0
-                    } catch {}
-                    if (-not $hasOpenRecPr) {
-                        Write-Host "[SUPERVISOR] State: CORE_COMPLETE"
-                        $state.State = "CORE_COMPLETE"
-                        Write-ShipDeSupervisorCheckpoint -State $state
-                        return "CORE_COMPLETE"
-                    }
-                }
-                Clear-ShipDeSupervisorCheckpoint
-                return "MERGED"
-            }
-            return $mergeResult
-        }
-        throw "Unexpected supervisor result: $result"
-    } finally {
-        Release-ShipDeSupervisorLock
-    }
+    Write-Host "SHIP DE DETERMINISTIC ORCHESTRATOR SUPERVISOR (RETIRED)"
+    $modeNote = if ($Preview -and $DryRun) { " (-Preview -DryRun)" } elseif ($Preview) { " (-Preview)" } elseif ($DryRun) { " (-DryRun)" } else { "" }
+    throw "Agent Orchestrator (AO) Supervise mode$modeNote has been retired (TASK-AI-238 Addendum 4). Use 'node tools/ai-brain/cli.js intake --work-item <ID>' or 'node tools/ai-brain/cli.js orchestrate --goal ...'."
 }
 
 function Invoke-ShipDeResume {
@@ -16574,7 +16028,6 @@ function Show-ShipDeMenu {
         Write-Host "4. Start prepared author"
         Write-Host "5. Run Codex review"
         Write-Host "6. Sync after human merge"
-        Write-Host "7. Supervise (unattended automation)"
         Write-Host "0. Exit"
         $choice = Read-Host "Choose"
         try {
@@ -16585,7 +16038,6 @@ function Show-ShipDeMenu {
                 "4" { Invoke-ShipDeStart }
                 "5" { Invoke-ShipDeReview }
                 "6" { Invoke-ShipDeSync }
-                "7" { Invoke-ShipDeSupervise -PullRequestNumber $PullRequestNumber -MaxRecoveryAttempts $MaxRecoveryAttempts }
                 "0" { return }
                 default { Write-Warning "Invalid choice." }
             }

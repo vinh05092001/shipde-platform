@@ -44,7 +44,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 
 ## External orchestration layer
 
-[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) is the control layer around the adopted ecosystem, not another adopted repository/provider. Ship Dễ pins the installed Windows runtime at `0.13.0` (raised from `0.12.12`, see AI-AO-PIN-2026-09-16), checks it with `ao status --json`, and starts it only through `scripts/ai/start-agent-orchestrator.ps1`. Its provenance is recorded in the top-level `orchestrator_runtime` object of `tools/ecosystem-manifest.json`, outside `adopted`.
+[Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) has been **RETIRED** (TASK-AI-238 Addendum 4): its launcher (`scripts/ai/start-agent-orchestrator.ps1`), executable discovery, and `orchestrator_runtime` entry in `tools/ecosystem-manifest.json` are removed. Use the Controller (`tools/ai-brain/cli.js`) or Paseo lane instead.
 
 ## Explicitly not adopted
 
@@ -364,13 +364,15 @@ Profiles enforce concurrency limits (maximum 1 implementation author and 1 resea
 10. **AI-TOOL-10**: A failed or partial installation reports exact state and rollback; it must not be recorded as installed or healthy.
 11. **AI-TOOL-11**: A supplied authoritative version/ref/path is fail closed; no fallback to latest, another branch or a broader filesystem path.
 12. **AI-TOOL-12**: GitHub merged state is reconciled by PR identity and merge SHA; repeated synchronization is a no-op and never rewrites unrelated rows.
-13. **AI-TOOL-13**: AO is a separately versioned external orchestration runtime with canonical source and health check; it is not counted in `adopted`.
+13. **AI-TOOL-13 (Historical / Superseded — AO retired in TASK-AI-238 Addendum 4)**: AO is a separately versioned external orchestration runtime with canonical source and health check; it is not counted in `adopted`.
 14. **AI-TOOL-14**: TASK-AI-06 through TASK-AI-12 add no repositories or providers. Profile compilation resolves only governed manifest IDs and stops fail-closed when a required capability is absent.
-15. **AI-TOOL-15**: The final unattended entrypoint is `control.ps1 -Action Resume`; `Supervise` remains a stage-specific recovery action until TASK-AI-12 completes convergence.
+15. **AI-TOOL-15 (Historical / Superseded — AO retired in TASK-AI-238 Addendum 4)**: The final unattended entrypoint is `control.ps1 -Action Resume`; `Supervise` remains a stage-specific recovery action until TASK-AI-12 completes convergence. (Superseded by Controller: `node tools/ai-brain/cli.js intake --work-item <ID>` / `orchestrate --goal ...`.)
 
-## Orchestrator Supervisor Policy (`AI-SUP-01` to `AI-SUP-21`)
+## Orchestrator Supervisor Policy (`AI-SUP-01` to `AI-SUP-21`) — Historical / Superseded
 
-The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Supervise`) automates routine Work Item processing while preserving human merge authority and fail-closed safety. It is a PowerShell state machine, not an LLM agent loop.
+> **Superseded (TASK-AI-238 Addendum 4):** `scripts/ai/control.ps1 -Action Supervise` and Agent Orchestrator (`ao`) are retired; use the Controller (`tools/ai-brain/cli.js`) or Paseo lane. The historical rules below are retained for traceability.
+
+The deterministic orchestrator supervisor (`scripts/ai/control.ps1 -Action Supervise`) automated routine Work Item processing while preserving human merge authority and fail-closed safety. It was a PowerShell state machine, not an LLM agent loop.
 
 ### Core principles
 

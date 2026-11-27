@@ -115,11 +115,9 @@ Normal daily operation uses only `control.ps1 -Action Resume` (or **Continue pip
 4. changes involving money, permissions, secrets, destructive migrations or production integrations;
 5. Codex review and final merge/release.
 
-## Unattended supervisor mode (TASK-AI-06+)
+## Unattended supervisor mode (TASK-AI-06+ — Historical / Superseded)
 
-Run `control.ps1 -Action Supervise`. It validates AO and, when AO is stopped, stale, or running with the wrong profile, invokes `scripts/ai/start-agent-orchestrator.ps1 -Restart` automatically. The launcher forces AO to use its own Claude profile directory (default `%USERPROFILE%\.claude-9router`, overridable with `SHIPDE_NINEROUTER_PROFILE`), routed to the local 9Router gateway, and leaves the native `.claude` login untouched; AgentRouter handles Claude/provider quota fallback without replacing the AO session. The deterministic supervisor automates the per-Work-Item procedure:
-
-AO is an external orchestration layer, not one of the adopted repositories/providers. Its canonical source, installed version and `ao status --json` health check are recorded separately in `tools/ecosystem-manifest.json`.
+Agent Orchestrator (`ao` / `scripts/ai/start-agent-orchestrator.ps1`) and `control.ps1 -Action Supervise` have been **RETIRED** (TASK-AI-238 Addendum 4). Use the Controller (`node tools/ai-brain/cli.js intake --work-item <ID>` / `orchestrate --goal ...`) or Paseo lane for autonomous execution. The historical supervisor lifecycle notes below remain for traceability only:
 
 1. **Discovers** normal remote `feat/*` and `fix/*` refs and selects the earliest prepared `READY_FOR_AUTHOR` Work Item.
 2. **Generates** the implementation prompt automatically (no clipboard/paste).
