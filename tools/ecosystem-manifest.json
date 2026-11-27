@@ -573,27 +573,6 @@
       "profiles": ["SECURITY_REVIEW", "PR_REVIEW"]
     },
     {
-      "id": "token-tracker",
-      "name": "TokenTracker",
-      "canonical_url": "https://github.com/xiufengsun/TokenTracker",
-      "repository": "xiufengsun/TokenTracker",
-      "owner": "xiufengsun",
-      "kind": "tool",
-      "role": "Token usage tracking, telemetry budget auditing, and agent expense visibility.",
-      "source_of_truth_boundary": "Token usage tracking superseded by internal usage adapter in tools/ai-brain and tools/ai-dashboard; retirement scheduled in TASK-AI-40.",
-      "install_method": "npm-dev",
-      "pinned_version_or_commit": "1.0.1",
-      "platform": "any",
-      "lifecycle_state": "PENDING",
-      "default_enabled": false,
-      "blocking_policy": "NON_BLOCKING",
-      "permissions": "token-usage-telemetry",
-      "telemetry_network_behavior": "local-metrics-only",
-      "health_check": "token-tracker --version",
-      "rollback": "N/A",
-      "profiles": ["FOUNDATION", "NIGHTLY_MAINTENANCE"]
-    },
-    {
       "id": "renovate",
       "name": "Renovate",
       "canonical_url": "https://github.com/renovatebot/renovate",

@@ -80,7 +80,7 @@ only entries with a `command` run, and only `gate: true` entries run automatical
 | trivy, syft, k6 | vulnerabilities, SBOM, load | `trivy fs --scanners vuln .`; `syft dir:. -o spdx-json`; `k6 run <script>` | installed 2026-11-08 via winget, manifest says not installed |
 
 The remaining entries (storybook, k6, pact-js, prism, hoverfly, toxiproxy, renovate, context7,
-tokentracker, vietnamese-provinces, lighthouse-ci, compose, agent-scan) are declared only. Add
+vietnamese-provinces, lighthouse-ci, compose, agent-scan) are declared only. Add
 a project dependency only when a Work Item needs it, with execution evidence at a reviewed SHA
 (`REPO-INTEGRATION-EVIDENCE.md`). Never report a tool as used unless its command ran.
 
@@ -107,7 +107,7 @@ a project dependency only when a Work Item needs it, with execution evidence at 
 | evilmartians/lefthook | local pre-commit and pre-push | installed hooks run automatically; do not bypass with `--no-verify` |
 | vercel/turborepo, pnpm/pnpm | monorepo tasks and installs | `pnpm <task>`, `pnpm --filter <app> <task>` |
 | open-telemetry/opentelemetry-js | tracing in services | follow existing instrumentation |
-| storybook, addon-a11y, msw-storybook-addon, pact-js, prism, hoverfly, toxiproxy, lighthouse-ci, k6, renovate, context7, tokentracker, vietnamese-provinces, compose, agent-scan | declared | add only through a Work Item that needs it, with execution evidence |
+| storybook, addon-a11y, msw-storybook-addon, pact-js, prism, hoverfly, toxiproxy, lighthouse-ci, k6, renovate, context7, vietnamese-provinces, compose, agent-scan | declared | add only through a Work Item that needs it, with execution evidence |
 
 ## 4. Reference repositories by job
 

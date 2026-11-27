@@ -326,7 +326,6 @@ function Assert-ShipDeManifest {
         "upstash/context7",
         "NousResearch/hermes-agent",
         "snyk/agent-scan",
-        "xiufengsun/TokenTracker",
         "renovatebot/renovate",
         "evilmartians/lefthook",
         "oraios/serena",

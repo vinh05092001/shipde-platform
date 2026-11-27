@@ -29,8 +29,7 @@
         "promptfoo",
         "lefthook",
         "open-spec",
-        "spec-kit",
-        "token-tracker"
+        "spec-kit"
       ],
       "required_tools": [
         "shipde-platform",
@@ -334,8 +333,7 @@
         "lighthouse-ci",
         "gitleaks",
         "trivy",
-        "renovate",
-        "token-tracker"
+        "renovate"
       ],
       "required_tools": [
         "shipde-platform",

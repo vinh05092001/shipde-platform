@@ -29,7 +29,6 @@
 const PENDING_EXPECTED = [
   'lighthouse-ci',
   'agent-scan',
-  'token-tracker',
   'lefthook',
   'axe-core',
   'trivy',
