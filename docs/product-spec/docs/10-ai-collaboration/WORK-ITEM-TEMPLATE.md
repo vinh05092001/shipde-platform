@@ -9,7 +9,7 @@
 | Status | `READY_FOR_AUTHOR` |
 | Delivery order | `<number>` |
 | Dependencies | `<merged IDs>` |
-| Assigned author | `<GEMINI or 9ROUTER>` |
+| Assigned author | `<GEMINI, CLAUDE or 9ROUTER>` |
 | Risk | `<LOW/MEDIUM/HIGH>` |
 | Allowed paths | `<explicit paths>` |
 | Reviewer | `Codex — fresh independent task` |
