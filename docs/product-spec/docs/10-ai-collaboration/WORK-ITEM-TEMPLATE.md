@@ -10,6 +10,8 @@
 | Delivery order | `<number>` |
 | Dependencies | `<merged IDs>` |
 | Assigned author | `<GEMINI, CLAUDE or 9ROUTER>` |
+| Difficulty | `<L1/L2/L3/L4>` |
+| Reuse Decision | `<IN_REPO / APPROVED_DEP / EXTERNAL_OSS https://... pin:<semver|commit> SPDX:<id>>` |
 | Risk | `<LOW/MEDIUM/HIGH>` |
 | Allowed paths | `<explicit paths>` |
 | Reviewer | `Codex — fresh independent task` |
@@ -98,11 +100,29 @@ Numbered implementation sequence ordered API/backend before UI, with the failing
 
 List exact repository commands. All must run from a clean checkout.
 
+## WHERE (key files and lines)
+
+List 1–6 exact `path:line` anchors (target 3–6 when applicable; 1 anchor is valid for `L1`) the author should read or touch first to keep the diff minimal.
+
+## Verify & RED
+
+State the smallest executable test command observed failing BEFORE production implementation (and expected failure signature), or write `test not applicable: <justification>` for non-executable rows.
+
 ## Codex review record
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `<sha>` | `<PASS/CHANGES_REQUIRED/BLOCKED>` | `<links>` |
+
+## PR receipt metrics
+
+Record real measurements in the PR receipt (do not invent estimates; omit `tokens` unless backed by a real receipt):
+
+- `elapsed READY->merge`: `<duration>`
+- `repair rounds`: `<count>`
+- `gate time`: `<duration>`
+- `cleanup disposition`: `<CLEANED (with cleanup receipt) | PENDING>`
+- `tokens`: `<optional, receipt-only>`
 
 ## Residual limitations
 
