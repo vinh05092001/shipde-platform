@@ -22,7 +22,7 @@ Gitleaks remains secrets/Git-history authority; Trivy scans vuln,config with HIG
 Input includes baseline/config and benign/malicious fixtures. Output separates clean scan (exit 0),
 findings (exit 1), operational error (exit 2), unavailable and skipped/no-target. A skip is not a clean scan.
 Suppression requires a documented reason and a regression test; no suppression is introduced here.
-Do not replace existing coverage with Nox or Cisco scanners before measured coverage parity.
+Do not replace existing coverage with Cisco or other external scanners before measured coverage parity.
 
 The group test executes existing adapters with injected benign, malicious, missing executable, thrown
 spawn, invalid report and operational-error fixtures. These are adapter tests, not native scanner runs.

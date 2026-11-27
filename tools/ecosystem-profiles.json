@@ -28,8 +28,7 @@
         "gitleaks",
         "promptfoo",
         "lefthook",
-        "open-spec",
-        "spec-kit"
+        "open-spec"
       ],
       "required_tools": [
         "shipde-platform",
@@ -233,8 +232,7 @@
         "promptfoo",
         "trivy",
         "agent-scan",
-        "lefthook",
-        "sylph"
+        "lefthook"
       ],
       "required_tools": ["shipde-platform", "git", "gitleaks", "eslint"],
       "optional_services": [],
@@ -261,8 +259,6 @@
         "playwright-mcp",
         "promptfoo",
         "open-spec",
-        "spec-kit",
-        "beads",
         "hermes-agent",
         "context7",
         "serena",
