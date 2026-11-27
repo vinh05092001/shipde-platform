@@ -26,7 +26,7 @@ Unless explicitly observed below, no external executable, service or provider wa
 
 | Tool | INSTALLED | WIRED | OBSERVED | NOT USED |
 | --- | --- | --- | --- | --- |
-| `agent-orchestrator` | E INSTALLED; `ao` unresolved | `scripts/ai/start-agent-orchestrator.ps1:Get-LiveAoProcess`; `tools/ai-brain/harness.js:RETIRED` rejects ao | N | Supervision not run; E conflicts with retired harness |
+| `agent-orchestrator` | Retired (`TASK-AI-238` Addendum 4) | `scripts/ai/control.ps1:Assert-ShipDeAoCommand` retired; `tools/ai-brain/harness.js:RETIRED` rejects ao | N | Launcher and `orchestrator_runtime` removed; fail-closed retired |
 | `shipde-platform` | Checkout present; E INTEGRATED | `package.json:scripts.test:brain` | Node tests below | Full product gates not run |
 | `shipde-brain` | E REJECTED; sibling not inspected | `tools/ecosystem-manifest.json:adopted` records deferred boundary | N | No workspace activation |
 | `nine-router` | H `9router`; E ADOPTED; absent T | `scripts/ai/ecosystem.ps1:Invoke-ShipDeActivate` optional service | N | Gateway/provider calls prohibited |

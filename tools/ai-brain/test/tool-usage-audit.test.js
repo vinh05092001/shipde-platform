@@ -11,7 +11,7 @@ const ecosystem = JSON.parse(read('tools/ecosystem-manifest.json'));
 const runtime = JSON.parse(read('tools/ai-brain/data/tool-manifest.json'));
 const inventory = new Set(
   [
-    ecosystem.orchestrator_runtime,
+    ...(ecosystem.orchestrator_runtime ? [ecosystem.orchestrator_runtime] : []),
     ...ecosystem.adopted,
     ...ecosystem.product_dependencies,
     ...ecosystem.candidates,
