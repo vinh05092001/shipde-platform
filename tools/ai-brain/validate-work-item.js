@@ -15,8 +15,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseCsvRecords } = require('./reconcile');
 
-const ALLOWED_FLAGS = new Set(['wi', 'file', 'register', 'json']);
+const ALLOWED_FLAGS = new Set(['wi', 'file', 'register', 'json', 'strict']);
 const PLACEHOLDER_PATTERN = /^(?:tbd|todo|none|n\/a|<[^>]+>|-+)$/i;
+const DIFFICULTY_PATTERN = /^L[1-4]$/;
 
 function parseCliArgs(argv) {
   const out = {};
@@ -32,8 +33,8 @@ function parseCliArgs(argv) {
       unknown.push(token);
       continue;
     }
-    if (key === 'json') {
-      out.json = true;
+    if (key === 'json' || key === 'strict') {
+      out[key] = true;
       continue;
     }
     const next = argv[i + 1];
@@ -106,7 +107,176 @@ function extractSectionBody(markdown, headingRegex) {
   };
 }
 
-function validateWorkItem({ workItemId, filePath, registerPath }) {
+function scanTopLevelSection(markdown, headingRegex) {
+  const lines = String(markdown || '').split(/\r?\n/);
+  let fenceChar = null;
+  let fenceLen = 0;
+  let matchCount = 0;
+  let collecting = false;
+  const collected = [];
+
+  for (const line of lines) {
+    const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      const ch = marker[0];
+      if (!fenceChar) {
+        fenceChar = ch;
+        fenceLen = marker.length;
+      } else if (
+        ch === fenceChar &&
+        marker.length >= fenceLen &&
+        /^\s{0,3}(?:`{3,}|~{3,})\s*$/.test(line)
+      ) {
+        fenceChar = null;
+        fenceLen = 0;
+      }
+      if (collecting) {
+        collected.push(line);
+      }
+      continue;
+    }
+
+    if (!fenceChar) {
+      if (headingRegex.test(line)) {
+        matchCount += 1;
+        if (matchCount === 1) {
+          collecting = true;
+          continue;
+        }
+        if (collecting) {
+          collecting = false;
+        }
+        continue;
+      }
+      if (collecting && /^##\s+/.test(line)) {
+        collecting = false;
+        continue;
+      }
+    }
+
+    if (collecting) {
+      collected.push(line);
+    }
+  }
+
+  return {
+    present: matchCount > 0,
+    count: matchCount,
+    body: collected.join('\n').trim(),
+  };
+}
+
+const EXTERNAL_OSS_ANCHORED_PATTERN =
+  /^EXTERNAL_OSS\s+(https?:\/\/\S+)\s+pin:([^\s,;)]+)\s+SPDX:([^\s,;)]+)(?:$|\s)/i;
+const CONCRETE_PIN_PATTERN = /^(?:v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?|[0-9a-f]{7,40})$/i;
+const KNOWN_SPDX_EXACT_PATTERN =
+  /^(?:MIT|Apache-2\.0|BSD-2-Clause|BSD-3-Clause|ISC|MPL-2\.0|Unlicense|CC0-1\.0|0BSD|BSL-1\.0|Zlib|PSF-2\.0|Artistic-2\.0)$/;
+const COMMAND_RUNNER_PATTERN =
+  /^(?:pnpm|npm|npx|node|python|python3|pytest|pwsh|powershell|git|bash|sh|vitest|jest|playwright)\s+\S+/i;
+
+function validateReuseDecisionValue(raw) {
+  const value = stripBackticks(raw);
+  if (!value || PLACEHOLDER_PATTERN.test(value)) {
+    return {
+      valid: false,
+      reason: 'Control Reuse Decision must be non-empty and not a placeholder',
+    };
+  }
+  if (/^(?:IN_REPO|APPROVED_DEP)(?:$|\s|[:—(-])/.test(value)) {
+    return { valid: true, value };
+  }
+  if (/^EXTERNAL_OSS(?:$|\s|[:—(-])/.test(value)) {
+    const match = value.match(EXTERNAL_OSS_ANCHORED_PATTERN);
+    if (!match) {
+      return {
+        valid: false,
+        reason:
+          'EXTERNAL_OSS Reuse Decision must follow exact format: EXTERNAL_OSS https://<url> pin:<semver|commit> SPDX:<id>',
+      };
+    }
+    const [, , pinValue, spdxValue] = match;
+    if (!CONCRETE_PIN_PATTERN.test(pinValue) || !KNOWN_SPDX_EXACT_PATTERN.test(spdxValue)) {
+      return {
+        valid: false,
+        reason:
+          'EXTERNAL_OSS Reuse Decision requires a concrete pinned semver or 7-40 hex commit in pin:<...> and a recognized SPDX ID in SPDX:<...> (subject to repository license review)',
+      };
+    }
+    return { valid: true, value };
+  }
+  return {
+    valid: false,
+    reason: `Control Reuse Decision "${value}" must start with IN_REPO, APPROVED_DEP, or EXTERNAL_OSS`,
+  };
+}
+
+function hasWherePathLineAnchor(body) {
+  return /(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\.[A-Za-z0-9]+):\d+(?:-\d+)?\b/.test(
+    String(body || '')
+  );
+}
+
+function hasVerifyRedEvidence(body) {
+  const text = String(body || '').trim();
+  if (!text || PLACEHOLDER_PATTERN.test(text)) {
+    return false;
+  }
+  const lines = text.split(/\r?\n/);
+  let inFence = false;
+  let fenceChar = null;
+  let fenceLen = 0;
+
+  for (const rawLine of lines) {
+    const fenceMatch = rawLine.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      const ch = marker[0];
+      if (!inFence) {
+        inFence = true;
+        fenceChar = ch;
+        fenceLen = marker.length;
+      } else if (
+        ch === fenceChar &&
+        marker.length >= fenceLen &&
+        /^\s{0,3}(?:`{3,}|~{3,})\s*$/.test(rawLine)
+      ) {
+        inFence = false;
+        fenceChar = null;
+        fenceLen = 0;
+      }
+      continue;
+    }
+
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+
+    if (!inFence && /^[-*]?\s*test not applicable\s*:\s*(\S.+)$/i.test(trimmed)) {
+      const justMatch = trimmed.match(/^[-*]?\s*test not applicable\s*:\s*(.+)$/i);
+      if (justMatch && !PLACEHOLDER_PATTERN.test(justMatch[1].trim())) {
+        return true;
+      }
+    }
+
+    const candidateLine = inFence ? trimmed : trimmed.replace(/^[-*]\s+/, '').trim();
+    if (COMMAND_RUNNER_PATTERN.test(candidateLine)) {
+      return true;
+    }
+
+    if (!inFence) {
+      const inlineCodeMatches = trimmed.match(/`([^`\n]+)`/g) || [];
+      for (const token of inlineCodeMatches) {
+        const inner = token.slice(1, -1).trim();
+        if (COMMAND_RUNNER_PATTERN.test(inner)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function validateWorkItem({ workItemId, filePath, registerPath, strict = false }) {
   const errors = [];
   const warnings = [];
 
@@ -253,6 +423,88 @@ function validateWorkItem({ workItemId, filePath, registerPath }) {
     });
   }
 
+  const targetList = strict ? errors : warnings;
+  const hasDifficultyKey = Object.prototype.hasOwnProperty.call(control, 'difficulty');
+  const mdDifficulty = stripBackticks(control.difficulty);
+  if (!hasDifficultyKey) {
+    targetList.push({
+      code: 'DIFFICULTY_MISSING',
+      message: 'Control table missing Difficulty (L1-L4)',
+    });
+  } else if (
+    !mdDifficulty ||
+    PLACEHOLDER_PATTERN.test(mdDifficulty) ||
+    !DIFFICULTY_PATTERN.test(mdDifficulty)
+  ) {
+    errors.push({
+      code: 'DIFFICULTY_INVALID',
+      message: `Control Difficulty "${mdDifficulty}" must be one of L1, L2, L3, L4`,
+    });
+  }
+
+  const hasReuseKey = Object.prototype.hasOwnProperty.call(control, 'reuse decision');
+  const reuseCheck = hasReuseKey ? validateReuseDecisionValue(control['reuse decision']) : null;
+  if (!hasReuseKey) {
+    targetList.push({
+      code: 'REUSE_DECISION_MISSING',
+      message: 'Control table missing Reuse Decision',
+    });
+  } else if (!reuseCheck.valid) {
+    errors.push({
+      code: 'REUSE_DECISION_INVALID',
+      message: reuseCheck.reason,
+    });
+  }
+
+  const whereSection = scanTopLevelSection(mdText, /^##\s+WHERE\b/i);
+  if (whereSection.count > 1) {
+    errors.push({
+      code: 'DUPLICATE_HEADING',
+      message: 'Duplicate ## WHERE heading found',
+    });
+  }
+  if (!whereSection.present) {
+    targetList.push({
+      code: 'WHERE_SECTION_MISSING',
+      message: 'Work Item missing ## WHERE section',
+    });
+  } else if (!whereSection.body || PLACEHOLDER_PATTERN.test(whereSection.body)) {
+    errors.push({
+      code: 'WHERE_SECTION_EMPTY',
+      message: 'Work Item ## WHERE section is declared but empty',
+    });
+  } else if (!hasWherePathLineAnchor(whereSection.body)) {
+    errors.push({
+      code: 'WHERE_ANCHOR_MISSING',
+      message: 'Work Item ## WHERE section must include at least one path:line anchor',
+    });
+  }
+
+  const verifyRedSection = scanTopLevelSection(mdText, /^##\s+Verify\s*&\s*RED\b/i);
+  if (verifyRedSection.count > 1) {
+    errors.push({
+      code: 'DUPLICATE_HEADING',
+      message: 'Duplicate ## Verify & RED heading found',
+    });
+  }
+  if (!verifyRedSection.present) {
+    targetList.push({
+      code: 'VERIFY_RED_SECTION_MISSING',
+      message: 'Work Item missing ## Verify & RED section',
+    });
+  } else if (!verifyRedSection.body || PLACEHOLDER_PATTERN.test(verifyRedSection.body)) {
+    errors.push({
+      code: 'VERIFY_RED_SECTION_EMPTY',
+      message: 'Work Item ## Verify & RED section is declared but empty',
+    });
+  } else if (!hasVerifyRedEvidence(verifyRedSection.body)) {
+    errors.push({
+      code: 'VERIFY_RED_INVALID',
+      message:
+        'Work Item ## Verify & RED section must include an executable test command or "test not applicable: <justification>"',
+    });
+  }
+
   const ready = errors.length === 0;
   return {
     ok: ready,
@@ -266,11 +518,22 @@ function validateWorkItem({ workItemId, filePath, registerPath }) {
       registerStatus: regRow ? regRow.status : null,
       branch: mdBranch || null,
       registerBranch: regRow ? regRow.branch : null,
+      difficulty: DIFFICULTY_PATTERN.test(mdDifficulty) ? mdDifficulty : null,
+      reuseDecision: reuseCheck && reuseCheck.valid ? reuseCheck.value : null,
+      strict: Boolean(strict),
       hasAllowedPaths: Boolean(
         mdAllowedPaths && !PLACEHOLDER_PATTERN.test(stripBackticks(mdAllowedPaths))
       ),
       hasAcceptanceSection: Boolean(acceptance.present && acceptance.body),
       hasVerificationSection: Boolean(verification.present && verification.body),
+      hasWhereSection: Boolean(
+        whereSection.present && whereSection.body && hasWherePathLineAnchor(whereSection.body)
+      ),
+      hasVerifyRedSection: Boolean(
+        verifyRedSection.present &&
+        verifyRedSection.body &&
+        hasVerifyRedEvidence(verifyRedSection.body)
+      ),
     },
     errors,
     warnings,
@@ -283,7 +546,7 @@ function main(argv) {
     process.stdout.write(JSON.stringify({ ok: false, ...parsed.error }, null, 2) + '\n');
     return 1;
   }
-  const { wi, file, register } = parsed.args;
+  const { wi, file, register, strict } = parsed.args;
   if (!wi || !file || !register) {
     process.stdout.write(
       JSON.stringify(
@@ -303,6 +566,7 @@ function main(argv) {
     workItemId: wi.trim(),
     filePath: file,
     registerPath: register,
+    strict: Boolean(strict),
   });
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   return result.ok ? 0 : 1;

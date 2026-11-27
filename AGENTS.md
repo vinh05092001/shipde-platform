@@ -87,6 +87,19 @@ These practices apply to authors and reviewers using any model. Adapted from [Ka
 
 For delegated work, include these four rules or explicitly tell the worker to read this section of `AGENTS.md` from its assigned checkout. Review against the work item and actual diff and test evidence.
 
+## Operating OS (compact recovery, routing, retry & hygiene)
+
+- **Compact / session recovery:** After `/compact` or starting a new session on an active Work Item, re-anchor state before editing: `node tools/ai-brain/resume-status.js --wi <ID> --checkpoint <PATH> --checkout <PATH>`.
+- **Handoff readiness:** Before authoring a new Work Item, validate metadata and scope: `node tools/ai-brain/validate-work-item.js --wi <ID> --file <PATH> --register <REG> --strict`.
+- **Difficulty routing (`L1`–`L4`):**
+  - `L1` (1–3 low-risk files) / `L2` (4–8 file standard vertical) → standard author + cross-family independent review.
+  - `L3` (multi-table, migration, webhook, job) → high-tier author + high-tier cross-family review.
+  - `L4` (money VND, auth, RBAC, tenant isolation, gate/security) → strongest cross-family pair + explicit human sign-off.
+- **Reuse Gate (3 tiers):** Prefer (1) existing repo modules → (2) approved dependencies in `package.json` → (3) external OSS compliant with the repository license/security policy (record source URL, pinned version/commit and exact SPDX identifier in the Work Item and PR).
+- **Hard retry budget & cache discipline:** Prefer keeping one Work Item sticky to one account to preserve prompt cache, subject to quota. Environment errors → fix environment; `429`/quota exhaustion → route account switching through Controller/JEV rather than unconditional manual switching; logic failures → **max 2 repair rounds** before escalating to a stronger reviewer/author.
+- **0-token self-check & hygiene:** Run `git diff --check`, secret scan and focused tests before requesting review. After merge, `node tools/ai-brain/hygiene-check.js --wi <ID> --checkpoint <PATH> --dry-run` is **preview-only** and conservatively retains unknown/unobserved worktrees; real cleanup requires verified evidence of owner, merged commit, clean tree, inactive session, and link-safe removal (unlink junctions before removing worktrees), and `CLEANED` is recorded only with a real cleanup receipt.
+- **PR receipt metrics:** Record real delivery numbers in the PR receipt (`elapsed READY->merge`, `repair rounds`, `gate time`, `cleanup disposition`; include `tokens` only when backed by a real receipt).
+
 ## Detailed contract
 
 - [Full contract and section map](docs/product-spec/docs/10-ai-collaboration/AGENT-CONTRACT-DETAILS.md)

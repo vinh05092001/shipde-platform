@@ -656,3 +656,405 @@ test('AC4: missing or invalid CLI inputs produce clear nonzero JSON results', ()
   assert.notEqual(r3.status, 0);
   assert.equal(JSON.parse(r3.stdout).ok, false);
 });
+
+test('Operating OS fields: legacy WI warns in default mode, fails in --strict; declared invalid fields always fail', () => {
+  const tmp = makeTempDir('wi-os-fields-');
+  try {
+    const csvHeader =
+      '"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"\n';
+    const row =
+      '"350","S00","AI workflow","TASK-AI-999","","OS fields test","Validate OS fields","READY_FOR_AUTHOR","","docs/product-spec/work-items/TASK-AI-999.md","feat/task-ai-999-os-test","","",""\n';
+    const regPath = path.join(tmp, 'register.csv');
+    fs.writeFileSync(regPath, csvHeader + row, 'utf8');
+
+    const legacyMd = [
+      '# TASK-AI-999 — Legacy',
+      '',
+      '## Control',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| Work Item ID | TASK-AI-999 |',
+      '| Status | READY_FOR_AUTHOR |',
+      '| Branch | feat/task-ai-999-os-test |',
+      '| Allowed paths | `tools/ai-brain/validate-work-item.js` |',
+      '',
+      '## Acceptance',
+      '',
+      '- AC1: works',
+      '',
+      '## Verification',
+      '',
+      '- node --test tools/ai-brain/test/task-ai-227-ai-os-pilot.test.js',
+      '',
+    ].join('\n');
+    const legacyPath = path.join(tmp, 'legacy.md');
+    fs.writeFileSync(legacyPath, legacyMd, 'utf8');
+
+    // 1. Legacy WI passes default mode with 4 warnings
+    const legacyDefault = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-999',
+      '--file',
+      legacyPath,
+      '--register',
+      regPath,
+    ]);
+    assert.equal(legacyDefault.status, 0);
+    const legacyDefaultOut = JSON.parse(legacyDefault.stdout);
+    assert.equal(legacyDefaultOut.ok, true);
+    assert.equal(legacyDefaultOut.errors.length, 0);
+    const warnCodes = legacyDefaultOut.warnings.map((w) => w.code);
+    assert.ok(warnCodes.includes('DIFFICULTY_MISSING'));
+    assert.ok(warnCodes.includes('REUSE_DECISION_MISSING'));
+    assert.ok(warnCodes.includes('WHERE_SECTION_MISSING'));
+    assert.ok(warnCodes.includes('VERIFY_RED_SECTION_MISSING'));
+
+    // 2. Legacy WI fails --strict mode
+    const legacyStrict = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-999',
+      '--file',
+      legacyPath,
+      '--register',
+      regPath,
+      '--strict',
+    ]);
+    assert.notEqual(legacyStrict.status, 0);
+    const legacyStrictOut = JSON.parse(legacyStrict.stdout);
+    assert.equal(legacyStrictOut.ok, false);
+    const strictErrCodes = legacyStrictOut.errors.map((e) => e.code);
+    assert.ok(strictErrCodes.includes('DIFFICULTY_MISSING'));
+    assert.ok(strictErrCodes.includes('REUSE_DECISION_MISSING'));
+    assert.ok(strictErrCodes.includes('WHERE_SECTION_MISSING'));
+    assert.ok(strictErrCodes.includes('VERIFY_RED_SECTION_MISSING'));
+
+    // 3. Complete OS WI passes both default and --strict with 0 warnings
+    const fullMd = [
+      '# TASK-AI-999 — Complete OS WI',
+      '',
+      '## Control',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| Work Item ID | TASK-AI-999 |',
+      '| Status | READY_FOR_AUTHOR |',
+      '| Difficulty | `L2` |',
+      '| Reuse Decision | `IN_REPO` |',
+      '| Branch | feat/task-ai-999-os-test |',
+      '| Allowed paths | `tools/ai-brain/validate-work-item.js` |',
+      '',
+      '## Acceptance',
+      '',
+      '- AC1: works',
+      '',
+      '## Verification commands',
+      '',
+      '- node --test tools/ai-brain/test/task-ai-227-ai-os-pilot.test.js',
+      '',
+      '## WHERE (key files and lines)',
+      '',
+      '- `tools/ai-brain/validate-work-item.js:109-280`',
+      '',
+      '## Verify & RED',
+      '',
+      '- `node --test tools/ai-brain/test/task-ai-227-ai-os-pilot.test.js` (fails on DIFFICULTY_INVALID)',
+      '',
+    ].join('\n');
+    const fullPath = path.join(tmp, 'full.md');
+    fs.writeFileSync(fullPath, fullMd, 'utf8');
+    const fullStrict = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-999',
+      '--file',
+      fullPath,
+      '--register',
+      regPath,
+      '--strict',
+    ]);
+    assert.equal(fullStrict.status, 0);
+    const fullOut = JSON.parse(fullStrict.stdout);
+    assert.equal(fullOut.ok, true);
+    assert.equal(fullOut.errors.length, 0);
+    assert.equal(fullOut.warnings.length, 0);
+    assert.equal(fullOut.metadata.difficulty, 'L2');
+    assert.equal(fullOut.metadata.reuseDecision, 'IN_REPO');
+
+    // 4. Declared invalid fields (L5, empty Reuse Decision, empty WHERE, duplicate Verify & RED) fail even without --strict
+    const badMd = [
+      '# TASK-AI-999 — Invalid OS fields',
+      '',
+      '## Control',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| Work Item ID | TASK-AI-999 |',
+      '| Status | READY_FOR_AUTHOR |',
+      '| Difficulty | `L5` |',
+      '| Reuse Decision |  |',
+      '| Branch | feat/task-ai-999-os-test |',
+      '| Allowed paths | `tools/ai-brain/validate-work-item.js` |',
+      '',
+      '## Acceptance',
+      '',
+      '- AC1: works',
+      '',
+      '## Verification',
+      '',
+      '- node --test',
+      '',
+      '## WHERE',
+      '',
+      '## Verify & RED',
+      '',
+      '- test 1',
+      '',
+      '## Verify & RED',
+      '',
+      '- duplicate',
+      '',
+    ].join('\n');
+    const badPath = path.join(tmp, 'bad.md');
+    fs.writeFileSync(badPath, badMd, 'utf8');
+    const badRes = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-999',
+      '--file',
+      badPath,
+      '--register',
+      regPath,
+    ]);
+    assert.notEqual(badRes.status, 0);
+    const badOut = JSON.parse(badRes.stdout);
+    const badCodes = badOut.errors.map((e) => e.code);
+    assert.ok(badCodes.includes('DIFFICULTY_INVALID'));
+    assert.ok(badCodes.includes('REUSE_DECISION_INVALID'));
+    assert.ok(badCodes.includes('WHERE_SECTION_EMPTY'));
+    assert.ok(badCodes.includes('DUPLICATE_HEADING'));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Operating OS negative cases: fenced headings ignored, Reuse Decision validated, WHERE path:line & Verify & RED enforced', () => {
+  const tmp = makeTempDir('wi-os-neg-');
+  try {
+    const csvHeader =
+      '"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"\n';
+    const row =
+      '"351","S00","AI workflow","TASK-AI-998","","OS negative test","Negative validation","READY_FOR_AUTHOR","","docs/product-spec/work-items/TASK-AI-998.md","feat/task-ai-998-os-neg","","",""\n';
+    const regPath = path.join(tmp, 'register.csv');
+    fs.writeFileSync(regPath, csvHeader + row, 'utf8');
+
+    // 1. Headings hidden inside ~~~md and ```md fences must NOT satisfy --strict, and unknown Reuse Decision must fail
+    const fencedMd = [
+      '# TASK-AI-998 — Fenced fake headings',
+      '',
+      '## Control',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| Work Item ID | TASK-AI-998 |',
+      '| Status | READY_FOR_AUTHOR |',
+      '| Difficulty | `L2` |',
+      '| Reuse Decision | `Nonsense` |',
+      '| Branch | feat/task-ai-998-os-neg |',
+      '| Allowed paths | `tools/ai-brain/validate-work-item.js` |',
+      '',
+      '## Acceptance',
+      '',
+      '~~~md',
+      '## WHERE',
+      'prose only inside tilde fence',
+      '## Verify & RED',
+      'prose only inside tilde fence',
+      '~~~',
+      '',
+      '```md',
+      '## WHERE',
+      'tools/ai-brain/validate-work-item.js:10',
+      '```',
+      '',
+      '## Verification',
+      '',
+      '- node --test',
+      '',
+    ].join('\n');
+    const fencedPath = path.join(tmp, 'fenced.md');
+    fs.writeFileSync(fencedPath, fencedMd, 'utf8');
+    const fencedRes = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-998',
+      '--file',
+      fencedPath,
+      '--register',
+      regPath,
+      '--strict',
+    ]);
+    assert.notEqual(fencedRes.status, 0);
+    const fencedCodes = JSON.parse(fencedRes.stdout).errors.map((e) => e.code);
+    assert.ok(fencedCodes.includes('REUSE_DECISION_INVALID'));
+    assert.ok(fencedCodes.includes('WHERE_SECTION_MISSING'));
+    assert.ok(fencedCodes.includes('VERIFY_RED_SECTION_MISSING'));
+
+    // 2. Prose-only WHERE (no path:line), prose-only Verify & RED, and EXTERNAL_OSS missing URL/pin/SPDX all fail
+    const proseOnlyMd = [
+      '# TASK-AI-998 — Prose only',
+      '',
+      '## Control',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| Work Item ID | TASK-AI-998 |',
+      '| Status | READY_FOR_AUTHOR |',
+      '| Difficulty | `L1` |',
+      '| Reuse Decision | `EXTERNAL_OSS (some lib)` |',
+      '| Branch | feat/task-ai-998-os-neg |',
+      '| Allowed paths | `tools/ai-brain/validate-work-item.js` |',
+      '',
+      '## Acceptance',
+      '',
+      '- AC1: works',
+      '',
+      '## Verification',
+      '',
+      '- node --test',
+      '',
+      '## WHERE',
+      '',
+      'Just prose with no file path or line number.',
+      '',
+      '## Verify & RED',
+      '',
+      'Will test manually later.',
+      '',
+    ].join('\n');
+    const prosePath = path.join(tmp, 'prose.md');
+    fs.writeFileSync(prosePath, proseOnlyMd, 'utf8');
+    const proseRes = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-998',
+      '--file',
+      prosePath,
+      '--register',
+      regPath,
+    ]);
+    assert.notEqual(proseRes.status, 0);
+    const proseCodes = JSON.parse(proseRes.stdout).errors.map((e) => e.code);
+    assert.ok(proseCodes.includes('REUSE_DECISION_INVALID'));
+    assert.ok(proseCodes.includes('WHERE_ANCHOR_MISSING'));
+    assert.ok(proseCodes.includes('VERIFY_RED_INVALID'));
+
+    // 3. Valid L1 single anchor, valid EXTERNAL_OSS with URL+pin+SPDX, and real fenced bash block inside Verify & RED PASS --strict
+    const validOssMd = [
+      '# TASK-AI-998 — Valid OSS + fenced RED command',
+      '',
+      '## Control',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| Work Item ID | TASK-AI-998 |',
+      '| Status | READY_FOR_AUTHOR |',
+      '| Difficulty | `L1` |',
+      '| Reuse Decision | `EXTERNAL_OSS https://github.com/example/pkg pin:v1.4.2 SPDX:MIT` |',
+      '| Branch | feat/task-ai-998-os-neg |',
+      '| Allowed paths | `tools/ai-brain/validate-work-item.js` |',
+      '',
+      '## Acceptance',
+      '',
+      '- AC1: works',
+      '',
+      '## Verification',
+      '',
+      '- node --test',
+      '',
+      '## WHERE',
+      '',
+      '- `AGENTS.md:90`',
+      '',
+      '## Verify & RED',
+      '',
+      '```bash',
+      'node --test tools/ai-brain/test/task-ai-227-ai-os-pilot.test.js',
+      '```',
+      '',
+    ].join('\n');
+    const validOssPath = path.join(tmp, 'valid-oss.md');
+    fs.writeFileSync(validOssPath, validOssMd, 'utf8');
+    const validOssRes = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-998',
+      '--file',
+      validOssPath,
+      '--register',
+      regPath,
+      '--strict',
+    ]);
+    assert.equal(validOssRes.status, 0, validOssRes.stdout);
+    const validOssOut = JSON.parse(validOssRes.stdout);
+    assert.equal(validOssOut.ok, true);
+    assert.equal(validOssOut.errors.length, 0);
+    assert.equal(validOssOut.warnings.length, 0);
+
+    // 4. Valid non-executable Verify & RED ("test not applicable: ...") passes --strict
+    const nonExecMd = validOssMd.replace(
+      /```bash[\s\S]*?```/,
+      'test not applicable: documentation-only governance update'
+    );
+    const nonExecPath = path.join(tmp, 'non-exec.md');
+    fs.writeFileSync(nonExecPath, nonExecMd, 'utf8');
+    const nonExecRes = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-998',
+      '--file',
+      nonExecPath,
+      '--register',
+      regPath,
+      '--strict',
+    ]);
+    assert.equal(nonExecRes.status, 0, nonExecRes.stdout);
+    assert.equal(JSON.parse(nonExecRes.stdout).ok, true);
+
+    // 5. Negative: EXTERNAL_OSS with pin:latest/pin:develop and fake SPDX:NOT-A-LICENSE fails --strict even when trailing prose mentions MIT and 1.2.3
+    const fakeOssMd = validOssMd.replace(
+      '| Reuse Decision | `EXTERNAL_OSS https://github.com/example/pkg pin:v1.4.2 SPDX:MIT` |',
+      '| Reuse Decision | `EXTERNAL_OSS https://example.com/library pin:develop SPDX:NOT-A-LICENSE update notes mention MIT and 1.2.3` |'
+    );
+    const fakeOssPath = path.join(tmp, 'fake-oss.md');
+    fs.writeFileSync(fakeOssPath, fakeOssMd, 'utf8');
+    const fakeOssRes = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-998',
+      '--file',
+      fakeOssPath,
+      '--register',
+      regPath,
+      '--strict',
+    ]);
+    assert.notEqual(fakeOssRes.status, 0);
+    assert.ok(
+      JSON.parse(fakeOssRes.stdout).errors.some((e) => e.code === 'REUSE_DECISION_INVALID')
+    );
+
+    // 6. Negative: fenced ~~~text block containing only prose inside Verify & RED fails --strict
+    const proseFenceMd = validOssMd.replace(
+      /```bash[\s\S]*?```/,
+      '~~~text\nJust prose inside a tilde fence, no executable command.\n~~~'
+    );
+    const proseFencePath = path.join(tmp, 'prose-fence.md');
+    fs.writeFileSync(proseFencePath, proseFenceMd, 'utf8');
+    const proseFenceRes = runNode(VALIDATE_CLI, [
+      '--wi',
+      'TASK-AI-998',
+      '--file',
+      proseFencePath,
+      '--register',
+      regPath,
+      '--strict',
+    ]);
+    assert.notEqual(proseFenceRes.status, 0);
+    assert.ok(JSON.parse(proseFenceRes.stdout).errors.some((e) => e.code === 'VERIFY_RED_INVALID'));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
