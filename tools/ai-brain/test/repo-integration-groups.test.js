@@ -740,7 +740,6 @@ for (const spec of FAMILY_C) {
       assert.match(doc, /No packages installed/);
     }
     if (spec.goalNum === 10)
-      for (const s of ['Serena', 'semantic editing'])
-        assert.ok(doc.includes(s));
+      for (const s of ['Serena', 'semantic editing']) assert.ok(doc.includes(s));
   });
 }
