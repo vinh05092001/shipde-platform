@@ -255,9 +255,13 @@ Trigger: existing app/scripts/test infrastructure. No duplicate adapters, fake s
 
 Host observations 2026-10-17: `git --version` returned `git version 2.49.0.windows.1`; `node --version` returned `v24.15.0`. Repository package manager pin: `pnpm@11.23.0`. PowerShell pnpm invocation was blocked by execution policy. Host observations do not promote repository states. BullMQ dependency exists in apps/worker/package.json but lacks manifest registration, so this declaration cannot claim INSTALLED. Existing pinned tools are conservatively INSTALLED only; callers alone do not prove execution.
 
+## CI vs local reconciliation (2026-11-27)
+
+- **Docker Compose (`docker/compose`)**: Used in CI workflow `.github/workflows/current-application.yml`, job `current-application`, via `docker compose -f infra/docker/compose.yml config --quiet`, `pnpm infra:up`, `pnpm infra:wait`, `docker compose -f infra/docker/compose.yml logs --no-color minio minio-init` (on failure), and `pnpm infra:down` solely for current-application backing services (Postgres, Redis, MinIO). This is separate from the retired Docker worker/writer lane (`TASK-AI-229`). Local host availability is not promoted (`tool-manifest.json` keeps `installed: false`; `ecosystem-manifest.json` keeps `lifecycle_state: "REJECTED"` for Controller/writer runtime).
+
 ## Verification and limitations
 
-Task/artifact: inspect repository declarations, run `node --test tools/ai-brain/test/repo-integration-group-7.test.js tools/ai-brain/test/repo-integration-evidence.test.js` and `python docs/product-spec/scripts/validate_docs.py`. Tests check evidence structure, not live tool availability.
+Task/artifact: inspect repository declarations, run `node --test tools/ai-brain/test/repo-integration-groups.test.js tools/ai-brain/test/repo-integration-evidence.test.js` (consolidated from `repo-integration-group-7.test.js` in PR #655) and `python docs/product-spec/scripts/validate_docs.py`. Tests check evidence structure, not live tool availability.
 
 SHA: pending Claude commit. No EXECUTION_VERIFIED or ACCEPTED claim. CI and independent review pending.
 

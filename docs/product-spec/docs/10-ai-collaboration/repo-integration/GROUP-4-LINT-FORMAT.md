@@ -71,6 +71,11 @@ constraints `eslint ^9.39.5`, `prettier ^3.9.6`; these are not claims about reso
 ]
 ```
 
+## Current runnable verification
+
+- `node --test tools/ai-brain/test/repo-integration-groups.test.js tools/ai-brain/test/repo-integration-evidence.test.js` (consolidated from `repo-integration-group-4.test.js` in PR #655)
+- `python docs/product-spec/scripts/validate_docs.py`
+
 ## Local verification ? 2026-10-17
 
 - `node --test tools/ai-brain/test/repo-integration-group-4.test.js tools/ai-brain/test/repo-integration-evidence.test.js`: exit 0, 10 passed, 0 failed, 0 skipped.

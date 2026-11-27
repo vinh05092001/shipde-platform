@@ -220,17 +220,6 @@
     "evidenceRef": "apps/api/package.json:dependencies"
   },
   {
-    "id": "nock",
-    "repo": "nock/nock",
-    "purpose": "HTTP mocking and expectations for Node.js",
-    "roles": ["author"],
-    "triggers": ["**/*.test.js", "**/*.spec.js", "**/*test*.ts"],
-    "gate": false,
-    "command": null,
-    "installed": false,
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
-  },
-  {
     "id": "node",
     "repo": "nodejs/node",
     "purpose": "JavaScript runtime for server-side execution",
@@ -273,17 +262,6 @@
     "command": null,
     "installed": true,
     "evidenceRef": "package.json:devDependencies"
-  },
-  {
-    "id": "pact-js",
-    "repo": "pact-foundation/pact-js",
-    "purpose": "Contract testing framework for API consumers and providers",
-    "roles": ["author"],
-    "triggers": ["**/*.test.js", "**/*.spec.js", "**/*pact*"],
-    "gate": false,
-    "command": null,
-    "installed": false,
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
   },
   {
     "id": "pnpm",
@@ -341,17 +319,6 @@
     "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
   },
   {
-    "id": "toxiproxy",
-    "repo": "shopify/toxiproxy",
-    "purpose": "TCP proxy to simulate chaotic network conditions for testing",
-    "roles": ["author"],
-    "triggers": ["**/*.test.js", "**/*.spec.js", "**/*integration*"],
-    "gate": false,
-    "command": null,
-    "installed": false,
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
-  },
-  {
     "id": "agent-scan",
     "repo": "snyk/agent-scan",
     "purpose": "Security scanning for skills and MCP servers before enabling",
@@ -364,17 +331,6 @@
     "blockedReason": "No command on this host: scanner not installed. As a gate it records TOOL_GATE_UNAVAILABLE and never counts as a pass.",
     "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md",
     "note": "No command on this host: the scanner is not installed here. As a gate it records TOOL_GATE_UNAVAILABLE, never blocks and never counts as a pass."
-  },
-  {
-    "id": "hoverfly",
-    "repo": "spectolabs/hoverfly",
-    "purpose": "Service virtualization and API simulation tool",
-    "roles": ["author"],
-    "triggers": ["**/*.test.js", "**/*.spec.js", "**/*mock*"],
-    "gate": false,
-    "command": null,
-    "installed": false,
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
   },
   {
     "id": "prism",

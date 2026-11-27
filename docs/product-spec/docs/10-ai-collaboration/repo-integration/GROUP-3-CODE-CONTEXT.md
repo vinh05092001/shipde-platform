@@ -157,7 +157,7 @@ Baseline inspected: `88933580ab502132a24ca18573db4e1efba69688`.
 SHA: pending Claude commit. Changes remain uncommitted; CI and independent review
 are pending. No EXECUTION_VERIFIED or ACCEPTED claim.
 
-- `node --test tools/ai-brain/test/repo-integration-group-3.test.js tools/ai-brain/test/repo-integration-evidence.test.js`
+- `node --test tools/ai-brain/test/repo-integration-groups.test.js tools/ai-brain/test/repo-integration-evidence.test.js` (consolidated from `repo-integration-group-3.test.js` in PR #655)
 - `python docs/product-spec/scripts/validate_docs.py`
 - Check worktree status against the item's four allowed deliverable files.
 - PR contract deferred to Claude after commit per operator update 17/10.
