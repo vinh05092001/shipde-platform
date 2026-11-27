@@ -172,7 +172,7 @@ The controller reads `tools/ecosystem-manifest.json` and activates only the gove
 | Browser diagnosis        | Playwright CLI, Chrome DevTools MCP                                              |
 | Research                 | `shipde-brain`, one of DSH/Hermes, Repomix                                       |
 | Review                   | Codex plus controller or governed review daemon                                  |
-| Multi-agent coordination | Beads plus governed mailbox capability                                           |
+| Multi-agent coordination | Governed mailbox capability (`agent-intercom`)                                   |
 | Security                 | Agent Scan                                                                       |
 | Cost                     | Internal usage adapter (`tools/ai-brain`) plus 9Router statistics                |
 | Maintenance              | Renovate plus Lefthook                                                           |
