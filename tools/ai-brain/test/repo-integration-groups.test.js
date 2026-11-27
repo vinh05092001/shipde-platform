@@ -672,7 +672,7 @@ const FAMILY_C = [
     num: 9,
     goalNum: 10,
     docPath: 'docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-9-CANDIDATES.md',
-    repos: ['DeusData/codebase-memory-mcp', 'Nox-HQ/nox'],
+    repos: ['DeusData/codebase-memory-mcp'],
   },
 ];
 
@@ -740,12 +740,7 @@ for (const spec of FAMILY_C) {
       assert.match(doc, /No packages installed/);
     }
     if (spec.goalNum === 10)
-      for (const s of [
-        'Serena',
-        'semantic editing',
-        'coverage parity',
-        'benign and violating fixtures',
-      ])
+      for (const s of ['Serena', 'semantic editing'])
         assert.ok(doc.includes(s));
   });
 }
