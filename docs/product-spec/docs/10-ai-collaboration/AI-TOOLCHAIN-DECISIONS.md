@@ -253,8 +253,7 @@ The machine-readable source of truth is `tools/ecosystem-manifest.json`. The cat
 
 ### 1. Internal Repositories (2)
 
-- `vinh05092001/shipde-platform`: Primary monorepo across 5 isolated worktrees.
-- `vinh05092001/shipde-brain`: Agent brain, memory, prompts, and knowledge base.
+- `vinh05092001/shipde-platform`: Primary monorepo across isolated worktrees (reviewed lessons live in the repository-local `tools/ai-brain/lessons/` workflow; external `vinh05092001/shipde-brain` declaration retired in TASK-AI-238 Addendum 5).
 
 ### 2. External Baseline Repositories (28)
 
@@ -357,7 +356,7 @@ Profiles enforce concurrency limits (maximum 1 implementation author and 1 resea
 3. **AI-TOOL-03**: Only one implementation agent and one research agent may run concurrently; the same Work Item never has parallel writers.
 4. **AI-TOOL-04**: 9Router is localhost-only, authenticated, request logging/cloud sync off, and never routes Codex review verdicts.
 5. **AI-TOOL-05**: Skills/content are commit-pinned, admission-scanned and loaded only by task trigger; no blanket prompt injection.
-6. **AI-TOOL-06**: Hermes memory and self-created skills are untrusted until human-reviewed into shipde-brain; no PII or credential persistence.
+6. **AI-TOOL-06**: Hermes memory and self-created skills are untrusted until human-reviewed into the repository-local lesson workflow; no PII or credential persistence.
 7. **AI-TOOL-07**: Playwright Test is acceptance evidence; Playwright CLI is token-efficient agent interaction; Playwright MCP is stateful exploration; Chrome DevTools MCP is deep runtime diagnosis.
 8. **AI-TOOL-08**: MSW owns behavioral mocks and Prism owns schema validation. Neither silently becomes production carrier evidence.
 9. **AI-TOOL-09**: Community Vietnamese address data is a versioned input, not legal or carrier source of truth; import requires provenance and validation.

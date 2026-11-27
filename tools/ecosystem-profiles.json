@@ -10,7 +10,6 @@
       "description": "Monorepo structure, tooling baseline, shared packages, and repository quality gates.",
       "allowed_tools": [
         "shipde-platform",
-        "shipde-brain",
         "git",
         "gh",
         "node",
@@ -248,7 +247,6 @@
       "description": "Read-only exploration, architecture analysis, external documentation, and specification research.",
       "allowed_tools": [
         "shipde-platform",
-        "shipde-brain",
         "git",
         "node",
         "nine-router",
