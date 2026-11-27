@@ -134,14 +134,21 @@ def matches(path: str, patterns: list[re.Pattern[str]]) -> bool:
     return any(p.match(path) for p in patterns)
 
 
-def load_policy(base_rev: str) -> dict | None:
-    text = show_at(base_rev, POLICY_PATH)
-    if text is None:
-        return None
-    try:
-        policy = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ContractInputError(f"base policy is not valid JSON: {exc}") from exc
+ALLOWED_SCOPED_KINDS = frozenset({"A", "M", "D"})
+TOOL_MANIFEST_PATH = "tools/ai-brain/data/tool-manifest.json"
+ECOSYSTEM_MANIFEST_PATH = "tools/ecosystem-manifest.json"
+ECOSYSTEM_PROTECTED_FIELDS = (
+    "pinned_version_or_commit",
+    "install_method",
+    "blocking_policy",
+    "health_check",
+    "lifecycle_state",
+    "default_enabled",
+)
+TOOL_PROTECTED_FIELDS = ("id", "repo", "gate", "command", "installed", "blocked", "evidenceRef")
+
+
+def validate_policy_object(policy: dict, label: str = "base policy") -> dict:
     required = (
         "maintenance_title_pattern",
         "maintenance_body_headings",
@@ -152,9 +159,48 @@ def load_policy(base_rev: str) -> dict | None:
         "terminal_statuses",
     )
     missing = [key for key in required if key not in policy]
-    if missing or policy.get("version") != 1:
-        raise ContractInputError(f"base policy is malformed (missing {missing or 'version 1'})")
+    version = policy.get("version")
+    if missing or version not in (1, 2):
+        raise ContractInputError(f"{label} is malformed (missing {missing or 'supported version'})")
+    if version == 1:
+        # Strict v1 isolation: v1 base policies never interpret v2 scoped rules.
+        if "scoped_governance_rules" in policy:
+            raise ContractInputError(f"{label} v1 must not declare scoped_governance_rules")
+        return policy
+    # Strict v2 schema validation
+    gov_headings = policy.get("governance_body_headings")
+    if not isinstance(gov_headings, list) or not gov_headings or any(not isinstance(h, str) or not h.strip() for h in gov_headings):
+        raise ContractInputError(f"{label} v2 requires non-empty governance_body_headings")
+    rules = policy.get("scoped_governance_rules")
+    if not isinstance(rules, list) or not rules:
+        raise ContractInputError(f"{label} v2 requires non-empty scoped_governance_rules")
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            raise ContractInputError(f"{label} scoped_governance_rules[{index}] must be an object")
+        rule_path = rule.get("path")
+        rule_kinds = rule.get("kinds")
+        if not isinstance(rule_path, str) or not rule_path.strip():
+            raise ContractInputError(f"{label} scoped_governance_rules[{index}].path is invalid")
+        if (
+            not isinstance(rule_kinds, list)
+            or not rule_kinds
+            or any(not isinstance(k, str) or k not in ALLOWED_SCOPED_KINDS for k in rule_kinds)
+        ):
+            raise ContractInputError(f"{label} scoped_governance_rules[{index}].kinds is invalid")
     return policy
+
+
+def load_policy(revision: str, label: str = "base policy") -> dict | None:
+    text = show_at(revision, POLICY_PATH)
+    if text is None:
+        return None
+    try:
+        policy = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ContractInputError(f"{label} is not valid JSON: {exc}") from exc
+    if not isinstance(policy, dict):
+        raise ContractInputError(f"{label} must be a JSON object")
+    return validate_policy_object(policy, label=label)
 
 
 REGISTER_REQUIRED_COLUMNS = ("delivery_order", "work_item_id", "status", "work_item_path")
@@ -214,18 +260,40 @@ def section_has_content(body: str, heading: str) -> bool:
 
 
 def classify(entries, policy) -> tuple[str, str]:
-    """Return ('A'|'B', reason). Anything not provably maintenance is Tier B."""
+    """Return ('A'|'G'|'B', reason).
+
+    - 'A': low-risk maintenance (PR-only evidence).
+    - 'G': protected scoped governance (PR-only evidence + preservation & invariant checks).
+    - 'B': Work Item + register required (product behavior, gates, undeclared paths).
+    """
     if policy is None:
         return "B", "no contract policy at the base commit"
     if not entries:
         return "B", "empty diff"
     maintenance = [glob_to_regex(p) for p in policy["maintenance_paths"]]
     protected = [glob_to_regex(p) for p in policy["protected_paths"]]
+    scoped_rules = (
+        [
+            (glob_to_regex(rule["path"]), frozenset(rule["kinds"]))
+            for rule in policy.get("scoped_governance_rules", [])
+        ]
+        if policy.get("version") == 2
+        else []
+    )
     work_item_dir = policy["work_item_dir"]
     register = policy["register_path"]
+    used_scoped = False
     for kind, paths in entries:
         if kind == "T":
             return "B", f"type change: {paths[0]}"
+        if (
+            len(paths) == 1
+            and paths[0] != register
+            and not paths[0].startswith(work_item_dir)
+            and any(pattern.match(paths[0]) and kind in allowed_kinds for pattern, allowed_kinds in scoped_rules)
+        ):
+            used_scoped = True
+            continue
         for path in paths:
             if path == register:
                 if kind != "M":
@@ -239,7 +307,83 @@ def classify(entries, policy) -> tuple[str, str]:
                 return "B", f"protected path: {path}"
             if not matches(path, maintenance):
                 return "B", f"path outside maintenance scope: {path}"
+    if used_scoped:
+        return "G", "declared scoped governance operations (protected risk, PR-only evidence)"
     return "A", "every path is inside the maintenance scope"
+
+
+def index_unique_entries(items, label: str) -> dict[str, dict]:
+    """Validate array schema and non-empty unique IDs (prevents first-match vs last-win shadowing)."""
+    if not isinstance(items, list):
+        raise ContractInputError(f"{label} must be a JSON array")
+    indexed: dict[str, dict] = {}
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ContractInputError(f"{label}[{index}] must be a JSON object")
+        entry_id = item.get("id")
+        if not isinstance(entry_id, str) or not entry_id.strip():
+            raise ContractInputError(f"{label}[{index}] has missing or empty id")
+        if entry_id in indexed:
+            raise ContractInputError(f"duplicate id in {label}: {entry_id}")
+        indexed[entry_id] = item
+    return indexed
+
+
+def check_manifest_invariants(entries, base_rev: str, head_rev: str) -> list[str]:
+    """Protected manifest edits under Tier G must never alter CI pins, gates or installed flags."""
+    errors: list[str] = []
+    changed = {p for _, paths in entries for p in paths}
+    if TOOL_MANIFEST_PATH in changed:
+        base_raw = show_at(base_rev, TOOL_MANIFEST_PATH)
+        head_raw = show_at(head_rev, TOOL_MANIFEST_PATH)
+        if base_raw is None or head_raw is None:
+            raise ContractInputError("tool-manifest.json unreadable for invariant check")
+        base_by_id = index_unique_entries(json.loads(base_raw), "base tool-manifest.json")
+        head_by_id = index_unique_entries(json.loads(head_raw), "head tool-manifest.json")
+        added = sorted(set(head_by_id) - set(base_by_id))
+        if added:
+            errors.append(f"scoped governance cannot add tool-manifest entries: {added}")
+        for tool_id, before in base_by_id.items():
+            if tool_id not in head_by_id:
+                if before.get("installed") is True or before.get("gate") is True or before.get("command"):
+                    errors.append(
+                        f"scoped governance cannot remove active/gated tool-manifest entry: {tool_id}"
+                    )
+                continue
+            after = head_by_id[tool_id]
+            drift = [f for f in TOOL_PROTECTED_FIELDS if before.get(f) != after.get(f)]
+            if drift:
+                errors.append(
+                    f"scoped governance cannot change protected tool-manifest fields on {tool_id}: {drift}"
+                )
+    if ECOSYSTEM_MANIFEST_PATH in changed:
+        base_raw = show_at(base_rev, ECOSYSTEM_MANIFEST_PATH)
+        head_raw = show_at(head_rev, ECOSYSTEM_MANIFEST_PATH)
+        if base_raw is None or head_raw is None:
+            raise ContractInputError("ecosystem-manifest.json unreadable for invariant check")
+        base_eco = json.loads(base_raw)
+        head_eco = json.loads(head_raw)
+        if not isinstance(base_eco, dict) or not isinstance(head_eco, dict):
+            raise ContractInputError("ecosystem-manifest.json must be a JSON object")
+        if base_eco.get("orchestrator_runtime") != head_eco.get("orchestrator_runtime"):
+            errors.append("scoped governance cannot modify orchestrator_runtime in ecosystem-manifest.json")
+        if base_eco.get("product_dependencies") != head_eco.get("product_dependencies"):
+            errors.append("scoped governance cannot modify product_dependencies in ecosystem-manifest.json")
+        base_adopted = index_unique_entries(base_eco.get("adopted"), "base ecosystem-manifest.adopted")
+        head_adopted = index_unique_entries(head_eco.get("adopted"), "head ecosystem-manifest.adopted")
+        index_unique_entries(base_eco.get("candidates", []), "base ecosystem-manifest.candidates")
+        index_unique_entries(head_eco.get("candidates", []), "head ecosystem-manifest.candidates")
+        if set(base_adopted) != set(head_adopted):
+            errors.append("scoped governance cannot add or remove adopted entries in ecosystem-manifest.json")
+        else:
+            for item_id, before in base_adopted.items():
+                after = head_adopted[item_id]
+                drift = [f for f in ECOSYSTEM_PROTECTED_FIELDS if before.get(f) != after.get(f)]
+                if drift:
+                    errors.append(
+                        f"scoped governance cannot change protected ecosystem fields on {item_id}: {drift}"
+                    )
+    return errors
 
 
 def common_checks(body: str, entries) -> list[str]:
@@ -370,6 +514,18 @@ def tier_b_checks(title, body, entries, head_rev) -> list[str]:
     return errors
 
 
+def tier_g_checks(title, body, entries, policy, base_rev, head_rev) -> list[str]:
+    errors = tier_a_checks(title, body, entries, policy, base_rev, head_rev)
+    required_headings = policy.get("governance_body_headings", policy["maintenance_body_headings"])
+    for heading in required_headings:
+        if heading in policy["maintenance_body_headings"]:
+            continue
+        if not section_has_content(body, heading):
+            errors.append(f"missing or empty protected governance PR section: {heading}")
+    errors.extend(check_manifest_invariants(entries, base_rev, head_rev))
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--event", required=True)
@@ -386,6 +542,8 @@ def main() -> int:
         tier, reason = classify(entries, policy)
         if tier == "A":
             errors = tier_a_checks(title, body, entries, policy, base_rev, head_rev)
+        elif tier == "G":
+            errors = tier_g_checks(title, body, entries, policy, base_rev, head_rev)
         else:
             errors = tier_b_checks(title, body, entries, head_rev)
     except (ContractInputError, OSError, ValueError) as exc:
@@ -399,7 +557,12 @@ def main() -> int:
             print(f"- {error}")
         return 1
 
-    label = "maintenance" if tier == "A" else (WORK_ITEM_PATTERN.findall(title) or [""])[0]
+    if tier == "A":
+        label = "maintenance"
+    elif tier == "G":
+        label = "protected governance (PR-only)"
+    else:
+        label = (WORK_ITEM_PATTERN.findall(title) or [""])[0]
     print(
         f"Pull Request contract passed for {label} (Tier {tier}); "
         f"{len(entries)} changed files inspected."
