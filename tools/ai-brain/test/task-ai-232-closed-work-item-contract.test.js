@@ -29,6 +29,8 @@ const row = (order, id, status, wiPath, pr = '', merge = '') =>
 
 const MAINTENANCE_BODY =
   '## Goal\nRemove shipped history.\n\n## Scope\nOnly listed files.\n\n## Verification\nvalidators pass\n\nReview status: READY_FOR_CODEX\n';
+const GOVERNANCE_BODY =
+  '## Goal\nReconcile declared governance artifacts.\n\n## Scope\nExact declared paths only.\n\n## Preservation\nNo product behavior, CI pins or gate commands altered.\n\n## Verification\nfocused tests and validators pass\n\nReview status: READY_FOR_CODEX\n';
 const WORK_ITEM_BODY = (id) =>
   [
     '## Work Item',
@@ -76,6 +78,66 @@ function makeRepo({ withPolicy = true, policyText } = {}) {
   for (const n of [1, 2, 3])
     write(`docs/product-spec/work-items/TASK-AI-${n}.md`, `# TASK-AI-${n}\n`);
   write('docs/notes.md', 'old note\n');
+  write('AGENTS.md', '# agents\n');
+  write('docs/product-spec/docs/10-ai-collaboration/WORK-ITEM-TEMPLATE.md', '# template\n');
+  write('docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md', '# inventory\n');
+  write(
+    'docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-8-CONDITIONAL.md',
+    '# g8\n'
+  );
+  write(
+    'tools/ai-brain/data/tool-manifest.json',
+    JSON.stringify(
+      [
+        {
+          id: 'gitleaks',
+          repo: 'gitleaks/gitleaks',
+          gate: true,
+          command: 'security:secrets',
+          installed: true,
+          evidenceRef: 'package.json:scripts.security:secrets',
+        },
+        {
+          id: 'nock',
+          repo: 'nock/nock',
+          gate: false,
+          command: null,
+          installed: false,
+          evidenceRef: 'docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md',
+        },
+      ],
+      null,
+      2
+    ) + '\n'
+  );
+  write(
+    'tools/ecosystem-manifest.json',
+    JSON.stringify(
+      {
+        orchestrator_runtime: { id: 'agent-orchestrator', pinned_version_or_commit: '0.13.0' },
+        adopted: [
+          {
+            id: 'semgrep',
+            pinned_version_or_commit: '1.181.0',
+            install_method: 'ci-provisioned',
+            blocking_policy: 'BLOCKING_GATE',
+            health_check: 'pnpm security:semgrep',
+            lifecycle_state: 'ADOPTED',
+            default_enabled: true,
+            source_of_truth_boundary: 'Original boundary.',
+          },
+        ],
+        product_dependencies: [{ id: 'node', pinned_version_or_commit: '24.15.0' }],
+        candidates: [{ id: 'nock', lifecycle_state: 'WATCH' }],
+      },
+      null,
+      2
+    ) + '\n'
+  );
+  write('tools/ai-brain/acceptance/ac-31-05-gate-rule.js', 'module.exports = {};\n');
+  write('tools/ai-brain/acceptance/ac-31-03-live.js', 'module.exports = { live: true };\n');
+  write('apps/web/src/components/SourceMatchingTab.tsx', 'export const Dead = () => null;\n');
+  write('apps/web/src/components/LiveButton.tsx', 'export const Live = () => null;\n');
   write('apps/api/src/auth.ts', 'export const a = 1;\n');
   write('.github/workflows/ci.yml', 'name: ci\n');
   g('add', '-A');
@@ -471,3 +533,279 @@ test('AC5: an unknown base commit fails closed', { skip: !python }, () => {
     r.cleanup();
   }
 });
+
+// Governance v2: Tier G (protected governance, PR-only evidence) exempts only
+// declared non-product operations from TASK-AI generation while enforcing
+// preservation evidence, manifest invariants, and strict Tier B on everything else.
+scenario('v2: editing root AGENTS.md and WORK-ITEM-TEMPLATE.md passes as Tier G', (r) => {
+  r.write('AGENTS.md', '# agents updated\n');
+  r.write('docs/product-spec/docs/10-ai-collaboration/WORK-ITEM-TEMPLATE.md', '# template v2\n');
+  const res = r.run('docs: update AGENTS and template', GOVERNANCE_BODY);
+  assert.equal(res.status, 0, res.out);
+  assert.match(res.out, /Tier G/);
+});
+
+scenario('v2 negative: Tier G fails without ## Preservation section', (r) => {
+  r.write('AGENTS.md', '# agents updated\n');
+  const res = r.run('docs: update AGENTS without preservation', MAINTENANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /missing or empty protected governance PR section: ## Preservation/);
+});
+
+scenario(
+  'v2: deleting declared dead web component and updating real inventory passes as Tier G',
+  (r) => {
+    r.remove('apps/web/src/components/SourceMatchingTab.tsx');
+    r.write('docs/product-spec/evidence/CURRENT-IMPLEMENTATION-INVENTORY.md', '# updated\n');
+    const res = r.run('chore(web): delete unused SourceMatchingTab', GOVERNANCE_BODY);
+    assert.equal(res.status, 0, res.out);
+    assert.match(res.out, /Tier G/);
+  }
+);
+
+scenario(
+  'v2: deleting declared dead acceptance script and reconciling manifests passes as Tier G',
+  (r) => {
+    r.remove('tools/ai-brain/acceptance/ac-31-05-gate-rule.js');
+    r.write(
+      'tools/ai-brain/data/tool-manifest.json',
+      JSON.stringify(
+        [
+          {
+            id: 'gitleaks',
+            repo: 'gitleaks/gitleaks',
+            gate: true,
+            command: 'security:secrets',
+            installed: true,
+            evidenceRef: 'package.json:scripts.security:secrets',
+          },
+        ],
+        null,
+        2
+      ) + '\n'
+    );
+    const eco = JSON.parse(
+      fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8')
+    );
+    eco.adopted[0].source_of_truth_boundary = 'Clarified CI vs local boundary.';
+    eco.candidates = [];
+    r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+    r.write(
+      'docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-8-CONDITIONAL.md',
+      '# g8 v2\n'
+    );
+    const res = r.run(
+      'chore(tools): prune dead acceptance and reconcile manifests',
+      GOVERNANCE_BODY
+    );
+    assert.equal(res.status, 0, res.out);
+    assert.match(res.out, /Tier G/);
+  }
+);
+
+scenario(
+  'v2 negative: deleting a live acceptance script outside declared list stays Tier B',
+  (r) => {
+    r.remove('tools/ai-brain/acceptance/ac-31-03-live.js');
+    const res = r.run('chore(tools): delete live acceptance', GOVERNANCE_BODY);
+    assert.equal(res.status, 1);
+    assert.match(
+      res.out,
+      /Tier B: path outside maintenance scope: tools\/ai-brain\/acceptance\/ac-31-03-live\.js/
+    );
+  }
+);
+
+scenario(
+  'v2 negative: changing CI pin in ecosystem-manifest.json fails manifest invariant',
+  (r) => {
+    const eco = JSON.parse(
+      fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8')
+    );
+    eco.adopted[0].pinned_version_or_commit = '9.9.9';
+    r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+    const res = r.run('chore(tools): bump semgrep pin', GOVERNANCE_BODY);
+    assert.equal(res.status, 1);
+    assert.match(
+      res.out,
+      /cannot change protected ecosystem fields on semgrep: \['pinned_version_or_commit'\]/
+    );
+  }
+);
+
+scenario(
+  'v2 negative: changing gate command in tool-manifest.json fails manifest invariant',
+  (r) => {
+    const tm = JSON.parse(
+      fs.readFileSync(path.join(r.dir, 'tools/ai-brain/data/tool-manifest.json'), 'utf8')
+    );
+    tm[0].command = 'echo bypassed';
+    r.write('tools/ai-brain/data/tool-manifest.json', JSON.stringify(tm, null, 2) + '\n');
+    const res = r.run('chore(tools): alter gitleaks command', GOVERNANCE_BODY);
+    assert.equal(res.status, 1);
+    assert.match(
+      res.out,
+      /cannot change protected tool-manifest fields on gitleaks: \['command'\]/
+    );
+  }
+);
+
+scenario(
+  'v2 negative: prepending duplicate semgrep entry in ecosystem-manifest.json fails closed',
+  (r) => {
+    const eco = JSON.parse(
+      fs.readFileSync(path.join(r.dir, 'tools/ecosystem-manifest.json'), 'utf8')
+    );
+    eco.adopted.unshift({ ...eco.adopted[0], pinned_version_or_commit: '9.9.9' });
+    r.write('tools/ecosystem-manifest.json', JSON.stringify(eco, null, 2) + '\n');
+    const res = r.run('chore(tools): shadow semgrep pin via duplicate', GOVERNANCE_BODY);
+    assert.equal(res.status, 1);
+    assert.match(res.out, /duplicate id in head ecosystem-manifest\.adopted: semgrep/);
+  }
+);
+
+scenario(
+  'v2 negative: prepending duplicate gitleaks entry in tool-manifest.json fails closed',
+  (r) => {
+    const tm = JSON.parse(
+      fs.readFileSync(path.join(r.dir, 'tools/ai-brain/data/tool-manifest.json'), 'utf8')
+    );
+    tm.unshift({ ...tm[0], command: 'echo shadowed' });
+    r.write('tools/ai-brain/data/tool-manifest.json', JSON.stringify(tm, null, 2) + '\n');
+    const res = r.run('chore(tools): shadow gitleaks via duplicate', GOVERNANCE_BODY);
+    assert.equal(res.status, 1);
+    assert.match(res.out, /duplicate id in head tool-manifest\.json: gitleaks/);
+  }
+);
+
+scenario('v2 negative: modifying a delete-only dead web component stays Tier B', (r) => {
+  r.write('apps/web/src/components/SourceMatchingTab.tsx', 'export const Edited = () => null;\n');
+  const res = r.run('chore(web): edit dead component', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(
+    res.out,
+    /Tier B: protected path: apps\/web\/src\/components\/SourceMatchingTab\.tsx/
+  );
+});
+
+scenario(
+  'v2 negative: deleting an undeclared web component stays Tier B (no blanket delete-only)',
+  (r) => {
+    r.remove('apps/web/src/components/LiveButton.tsx');
+    const res = r.run('chore(web): delete undeclared component', GOVERNANCE_BODY);
+    assert.equal(res.status, 1);
+    assert.match(res.out, /Tier B: protected path: apps\/web\/src\/components\/LiveButton\.tsx/);
+  }
+);
+
+scenario('v2 negative: renaming a declared dead web component into docs stays Tier B', (r) => {
+  r.g('mv', 'apps/web/src/components/SourceMatchingTab.tsx', 'docs/SourceMatchingTab.tsx');
+  const res = r.run('chore(web): move dead component', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(
+    res.out,
+    /Tier B: protected path: apps\/web\/src\/components\/SourceMatchingTab\.tsx/
+  );
+});
+
+scenario('v2 negative: deleting root AGENTS.md stays Tier B (only M is allowed)', (r) => {
+  r.remove('AGENTS.md');
+  const res = r.run('chore: delete agents', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: AGENTS\.md/);
+});
+
+scenario('v2 negative: deleting a workflow or auth file stays Tier B', (r) => {
+  r.remove('.github/workflows/ci.yml');
+  const res = r.run('chore: delete workflow', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: \.github\/workflows\/ci\.yml/);
+});
+
+scenario('v2 negative: mixing scoped governance with apps/api edit stays Tier B', (r) => {
+  r.write('AGENTS.md', '# agents updated\n');
+  r.write('apps/api/src/auth.ts', 'export const a = 99;\n');
+  const res = r.run('chore: update agents and auth', GOVERNANCE_BODY);
+  assert.equal(res.status, 1);
+  assert.match(res.out, /Tier B: protected path: apps\/api\/src\/auth\.ts/);
+});
+
+test(
+  'v2 negative: v1 policy declaring scoped_governance_rules fails closed',
+  { skip: !python },
+  () => {
+    const p = JSON.parse(fs.readFileSync(path.join(repo, POLICY), 'utf8'));
+    p.version = 1;
+    const r = makeRepo({ policyText: JSON.stringify(p) });
+    try {
+      r.write('AGENTS.md', '# edited\n');
+      const res = r.run('docs: edit agents', GOVERNANCE_BODY);
+      assert.equal(res.status, 1);
+      assert.match(res.out, /v1 must not declare scoped_governance_rules/);
+    } finally {
+      r.cleanup();
+    }
+  }
+);
+
+test(
+  'v2 negative: v2 policy missing scoped_governance_rules fails closed',
+  { skip: !python },
+  () => {
+    const p = JSON.parse(fs.readFileSync(path.join(repo, POLICY), 'utf8'));
+    delete p.scoped_governance_rules;
+    const r = makeRepo({ policyText: JSON.stringify(p) });
+    try {
+      r.write('docs/notes.md', 'x\n');
+      const res = r.run('docs: edit notes', MAINTENANCE_BODY);
+      assert.equal(res.status, 1);
+      assert.match(res.out, /v2 requires non-empty scoped_governance_rules/);
+    } finally {
+      r.cleanup();
+    }
+  }
+);
+
+test(
+  'v2 negative: invalid scoped_governance_rules kind in base policy fails closed',
+  { skip: !python },
+  () => {
+    const basePolicy = JSON.parse(fs.readFileSync(path.join(repo, POLICY), 'utf8'));
+    basePolicy.scoped_governance_rules = [{ path: 'AGENTS.md', kinds: ['R'] }];
+    const r = makeRepo({ policyText: JSON.stringify(basePolicy) });
+    try {
+      r.write('AGENTS.md', '# edited\n');
+      const res = r.run('docs: edit agents', GOVERNANCE_BODY);
+      assert.equal(res.status, 1);
+      assert.match(
+        res.out,
+        /unreadable contract input: base policy scoped_governance_rules\[0\]\.kinds is invalid/
+      );
+    } finally {
+      r.cleanup();
+    }
+  }
+);
+
+test(
+  'v2 negative: modifying policy/validator from v1 or v2 base stays strictly Tier B (no self-bootstrap)',
+  { skip: !python },
+  () => {
+    const v2Policy = JSON.parse(fs.readFileSync(path.join(repo, POLICY), 'utf8'));
+    const v1Policy = { ...v2Policy, version: 1 };
+    delete v1Policy.scoped_governance_rules;
+    delete v1Policy.governance_body_headings;
+    const r = makeRepo({ policyText: JSON.stringify(v1Policy, null, 2) + '\n' });
+    try {
+      r.write(POLICY, JSON.stringify(v2Policy, null, 2) + '\n');
+      const res = r.run('chore(governance): attempt self-upgrade without WI', GOVERNANCE_BODY);
+      assert.equal(res.status, 1, res.out);
+      assert.match(
+        res.out,
+        /Tier B: protected path: docs\/product-spec\/scripts\/pr_contract_policy\.json/
+      );
+    } finally {
+      r.cleanup();
+    }
+  }
+);
