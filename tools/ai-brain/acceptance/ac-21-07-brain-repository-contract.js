@@ -20,7 +20,9 @@ const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
 
 // CONTROL: the contract detector must fail on an empty manifest.
 if (brainRepositoryViolations({}).length === 0) {
-  console.error('CONTROL_FAILED: the contract detector cannot report a missing trust-boundary policy');
+  console.error(
+    'CONTROL_FAILED: the contract detector cannot report a missing trust-boundary policy'
+  );
   process.exit(2);
 }
 

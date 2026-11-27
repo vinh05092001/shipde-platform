@@ -26,7 +26,9 @@ if (!fs.existsSync(MANIFEST_PATH)) {
 const real = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
 
 if (brainRepositoryViolations(real).length > 0) {
-  console.error('CONTROL_FAILED: the real manifest already violates the lesson trust-boundary contract');
+  console.error(
+    'CONTROL_FAILED: the real manifest already violates the lesson trust-boundary contract'
+  );
   process.exit(2);
 }
 
@@ -49,7 +51,9 @@ const credentialDrift = verdict((manifest) => {
     'Hermes memory is auto-trusted (untrusted until human-reviewed into the repository-local lesson workflow) and may persist credentials despite no PII rules.';
 });
 if (!credentialDrift || credentialDrift.code !== CODES.UNTRUSTED_POLICY_MISSING) {
-  console.error('CONTROL_FAILED: the contract accepted a keyword-preserving weakened AI-TOOL-06 policy');
+  console.error(
+    'CONTROL_FAILED: the contract accepted a keyword-preserving weakened AI-TOOL-06 policy'
+  );
   process.exit(2);
 }
 
