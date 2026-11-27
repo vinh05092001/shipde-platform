@@ -11,7 +11,7 @@
 | Dependencies | `<merged IDs>` |
 | Assigned author | `<GEMINI, CLAUDE or 9ROUTER>` |
 | Difficulty | `<L1/L2/L3/L4>` |
-| Reuse Decision | `<IN_REPO / APPROVED_DEP / EXTERNAL_OSS https://... pin:<semver|commit> SPDX:<id>>` |
+| Reuse Decision | `<IN_REPO / APPROVED_DEP / EXTERNAL_OSS https://... pin:<version-or-commit> SPDX:<id>>` |
 | Risk | `<LOW/MEDIUM/HIGH>` |
 | Allowed paths | `<explicit paths>` |
 | Reviewer | `Codex — fresh independent task` |
