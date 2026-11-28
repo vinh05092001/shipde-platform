@@ -221,39 +221,44 @@ export class NotificationProcessor {
       const contributionKey =
         outboxId || `${envelope.event}:${envelope.source.id}:${envelope.occurred_at}`;
 
-      // D6 P1 #4: Single atomic transaction for digest group upsert + contribution dedupe + count increment
+      // D6 P1 #4: one transaction for digest group insert-if-absent + contribution dedupe + count increment.
+      // createMany(skipDuplicates) is INSERT ... ON CONFLICT DO NOTHING: a concurrent first contribution
+      // waits for the winning insert instead of failing with P2002 (Prisma upsert can race to a plain INSERT).
+      const groupWhere = {
+        merchant_id_event_type_group_key_recipient_user_id: {
+          merchant_id: envelope.merchant_id,
+          event_type: envelope.event,
+          group_key: effectiveGroupKey,
+          recipient_user_id: user.id,
+        },
+      };
       const notification = rule.digest
         ? await this.prisma.$transaction(async (tx) => {
-            const base = await tx.notification.upsert({
-              where: {
-                merchant_id_event_type_group_key_recipient_user_id: {
+            await tx.notification.createMany({
+              skipDuplicates: true,
+              data: [
+                {
                   merchant_id: envelope.merchant_id,
-                  event_type: envelope.event,
-                  group_key: effectiveGroupKey,
                   recipient_user_id: user.id,
+                  event_type: envelope.event,
+                  severity: severityEnum,
+                  severity_rank: severityRank,
+                  title: snapshot.title,
+                  body: snapshot.body,
+                  source_type: envelope.source.type,
+                  source_id: envelope.source.id,
+                  source_branch_id: envelope.source.branch_id,
+                  source_warehouse_id: envelope.source.warehouse_id,
+                  source_carrier_account_id: envelope.source.carrier_account_id,
+                  group_key: effectiveGroupKey,
+                  digest_count: 0,
+                  link_path: snapshot.linkPath,
+                  status: NotificationStatusEnum.ACTIVE,
+                  retention_until: retentionUntil,
                 },
-              },
-              create: {
-                merchant_id: envelope.merchant_id,
-                recipient_user_id: user.id,
-                event_type: envelope.event,
-                severity: severityEnum,
-                severity_rank: severityRank,
-                title: snapshot.title,
-                body: snapshot.body,
-                source_type: envelope.source.type,
-                source_id: envelope.source.id,
-                source_branch_id: envelope.source.branch_id,
-                source_warehouse_id: envelope.source.warehouse_id,
-                source_carrier_account_id: envelope.source.carrier_account_id,
-                group_key: effectiveGroupKey,
-                digest_count: 0,
-                link_path: snapshot.linkPath,
-                status: NotificationStatusEnum.ACTIVE,
-                retention_until: retentionUntil,
-              },
-              update: {},
+              ],
             });
+            const base = await tx.notification.findUniqueOrThrow({ where: groupWhere });
             const inserted = await tx.notificationDigestContribution.createMany({
               data: [{ notification_id: base.id, contribution_key: contributionKey }],
               skipDuplicates: true,
@@ -302,22 +307,20 @@ export class NotificationProcessor {
 
       // 1. In-app channel delivery row
       if (shouldDeliverInApp) {
-        await this.prisma.notificationChannelDelivery.upsert({
-          where: {
-            notification_id_channel: {
+        // Insert-if-absent (ON CONFLICT DO NOTHING): concurrent contributions to one digest group share
+        // this row; an existing row is left unchanged, as the previous upsert with update: {} did.
+        await this.prisma.notificationChannelDelivery.createMany({
+          skipDuplicates: true,
+          data: [
+            {
               notification_id: notification.id,
               channel: NotificationChannelEnum.IN_APP,
+              state: NotificationDeliveryStateEnum.SENT,
+              attempts: 1,
+              sent_at: now,
+              correlation_id: correlationId,
             },
-          },
-          create: {
-            notification_id: notification.id,
-            channel: NotificationChannelEnum.IN_APP,
-            state: NotificationDeliveryStateEnum.SENT,
-            attempts: 1,
-            sent_at: now,
-            correlation_id: correlationId,
-          },
-          update: {},
+          ],
         });
 
         if (isProtected) {

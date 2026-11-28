@@ -567,6 +567,57 @@ test('FEAT-COM-09 Slice A Worker Integration: D3/D4/D5/D6 processor, email state
         'Distinct event in same digest window must increment digest_count'
       );
 
+      // Concurrent first contributions into a NEW digest group: two distinct outbox events race to
+      // create the group row; exactly one row must exist and both contributions must count.
+      const digestGroupRow = (window: string) =>
+        prisma.notification.findMany({
+          where: {
+            merchant_id: m2.id,
+            recipient_user_id: acctM2.id,
+            event_type: 'EVT-COM-09-10',
+            group_key: { endsWith: `:${window}` },
+          },
+        });
+      const envRaceA = buildFixtureNotificationEnvelope('EVT-COM-09-10', {
+        merchantId: m2.id,
+        digestWindow: '2026-11-29',
+        queueRevision: 3,
+      });
+      const envRaceB = buildFixtureNotificationEnvelope('EVT-COM-09-10', {
+        merchantId: m2.id,
+        digestWindow: '2026-11-29',
+        queueRevision: 4,
+      });
+      await Promise.all([
+        processor.processEnvelope(envRaceA, 'corr-race-a', new Date(), `outbox-race-a-${suffix}`),
+        processor.processEnvelope(envRaceB, 'corr-race-b', new Date(), `outbox-race-b-${suffix}`),
+      ]);
+      const raceRows = await digestGroupRow('2026-11-29');
+      assert.equal(raceRows.length, 1, 'Concurrent first contributions must share one group row');
+      assert.equal(
+        raceRows[0].digest_count,
+        2,
+        'Two distinct concurrent first contributions must both count'
+      );
+
+      // Same outbox event delivered twice concurrently into a NEW group: counted exactly once.
+      const envSame = buildFixtureNotificationEnvelope('EVT-COM-09-10', {
+        merchantId: m2.id,
+        digestWindow: '2026-11-30',
+        queueRevision: 5,
+      });
+      await Promise.all([
+        processor.processEnvelope(envSame, 'corr-same-1', new Date(), `outbox-same-${suffix}`),
+        processor.processEnvelope(envSame, 'corr-same-2', new Date(), `outbox-same-${suffix}`),
+      ]);
+      const sameRows = await digestGroupRow('2026-11-30');
+      assert.equal(sameRows.length, 1, 'Concurrent replay must not create a second group row');
+      assert.equal(
+        sameRows[0].digest_count,
+        1,
+        'Concurrent replay of one outbox event counts once'
+      );
+
       // Cross-midnight replay for EVT-COM-09-08 with digest_window: null must stay 1 row & digest_count=1.
       // Recipient timezone is the schema default Asia/Ho_Chi_Minh (UTC+7): 16:55Z/17:05Z are 23:55/00:05 local.
       const envReturnNull = buildFixtureNotificationEnvelope('EVT-COM-09-08', {
