@@ -21,6 +21,7 @@ import { WarehousesModule } from './warehouses/warehouses.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { SearchModule } from './search/search.module';
 import { CarrierCatalogModule } from './carrier-catalog/carrier-catalog.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { CarrierCatalogModule } from './carrier-catalog/carrier-catalog.module';
     OnboardingModule,
     SearchModule,
     CarrierCatalogModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
   providers: [

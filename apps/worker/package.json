@@ -9,7 +9,8 @@
     "dev": "tsx watch --env-file-if-exists=../../.env --env-file-if-exists=.env src/main.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx src/worker.test.ts && tsx --tsconfig tsconfig.json src/worker.supertest.spec.ts"
+    "test": "tsx src/worker.test.ts && tsx --tsconfig tsconfig.json src/worker.supertest.spec.ts && tsx --tsconfig tsconfig.json --test src/notifications/notifications.unit.spec.ts",
+    "test:notifications-integration": "tsx --tsconfig tsconfig.json --test src/notifications/notifications.integration.spec.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.758.0",

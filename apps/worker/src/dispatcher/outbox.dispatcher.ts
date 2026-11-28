@@ -12,13 +12,20 @@ import {
   injectTraceContext,
 } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
-import { SMOKE_QUEUE_NAME, QUEUE_SMOKE_EVENT_TYPE } from '@shipde/contracts';
+import {
+  SMOKE_QUEUE_NAME,
+  QUEUE_SMOKE_EVENT_TYPE,
+  NOTIFICATION_QUEUE_NAME,
+  NOTIFICATION_EVENT,
+} from '@shipde/contracts';
 import { OutboxStatusEnum, OutboxEvent } from '@prisma/client';
 import { SmokeJobData } from '../queue/smoke.worker';
+import { NotificationJobData } from '../notifications/notifications.worker';
 
 @Injectable()
 export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
   private queue: Queue<SmokeJobData> | null = null;
+  private notificationQueue: Queue<NotificationJobData> | null = null;
   private pollInterval: NodeJS.Timeout | null = null;
   private isTickRunning = false;
   private readonly config: AppConfig;
@@ -31,7 +38,7 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit(): Promise<void> {
-    this.queue = new Queue<SmokeJobData>(SMOKE_QUEUE_NAME, {
+    const queueOpts = {
       connection: {
         host: this.config.REDIS_HOST,
         port: this.config.REDIS_PORT,
@@ -46,7 +53,9 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
         removeOnComplete: false,
         removeOnFail: false,
       },
-    });
+    };
+    this.queue = new Queue<SmokeJobData>(SMOKE_QUEUE_NAME, queueOpts);
+    this.notificationQueue = new Queue<NotificationJobData>(NOTIFICATION_QUEUE_NAME, queueOpts);
 
     // Serialize interval ticks to prevent overlapping execution (Finding 5)
     this.pollInterval = setInterval(async () => {
@@ -56,7 +65,9 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
       this.isTickRunning = true;
       try {
         await this.dispatchPending();
+        await this.dispatchPendingNotifications();
         await this.recoverStaleProcessing();
+        await this.recoverStaleNotificationProcessing();
       } catch {
         // Errors logged internally in dispatchPending / recoverStaleProcessing
       } finally {
@@ -256,6 +267,120 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * FEAT-COM-09: Dedicated NOTIFICATION_EVENT outbox dispatch preserving smoke dispatcher isolation.
+   */
+  async dispatchPendingNotifications(limit = 10): Promise<{ dispatched: number; failed: number }> {
+    if (!this.notificationQueue) {
+      return { dispatched: 0, failed: 0 };
+    }
+    const now = new Date();
+    const pendingEvents = await this.prisma.outboxEvent.findMany({
+      where: {
+        event_type: NOTIFICATION_EVENT,
+        status: OutboxStatusEnum.PENDING,
+        scheduled_at: { lte: now },
+      },
+      take: limit,
+      orderBy: { scheduled_at: 'asc' },
+    });
+
+    let dispatched = 0;
+    let failed = 0;
+
+    for (const event of pendingEvents) {
+      const correlationId = normalizeCorrelationId(event.correlation_id);
+      try {
+        const claimResult = await this.prisma.outboxEvent.updateMany({
+          where: { id: event.id, status: OutboxStatusEnum.PENDING },
+          data: { status: OutboxStatusEnum.PROCESSING, scheduled_at: new Date() },
+        });
+        if (claimResult.count === 0) continue;
+
+        const payloadObj = event.payload as Record<string, unknown>;
+        // BullMQ 5 forbids ':' in custom jobId; keep full colon-delimited idempotencyKey in DB & job payload,
+        // and use deterministic colon-free UUID + attempt generation for BullMQ jobId dedupe.
+        const attemptJobId = `notif-${event.id}-del-${event.attempts}`;
+        const traceCarrier: Record<string, string> = {};
+        injectTraceContext(traceCarrier);
+
+        await this.notificationQueue.add(
+          'notification-job',
+          {
+            outboxId: event.id,
+            attempt: event.attempts,
+            correlationId,
+            eventType: NOTIFICATION_EVENT,
+            payload: payloadObj,
+            idempotencyKey: event.idempotency_key || undefined,
+            traceContext: traceCarrier,
+          },
+          { jobId: attemptJobId }
+        );
+        dispatched++;
+      } catch (err: unknown) {
+        failed++;
+        const errorMessage = sanitizeErrorMessage(err);
+        const nextAttempts = event.attempts + 1;
+        const isExhausted = nextAttempts >= 3;
+        await this.prisma.outboxEvent.updateMany({
+          where: { id: event.id, status: OutboxStatusEnum.PROCESSING },
+          data: {
+            status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
+            attempts: nextAttempts,
+            last_error: errorMessage,
+            scheduled_at: new Date(Date.now() + Math.min(1000 * Math.pow(2, nextAttempts), 30000)),
+          },
+        });
+      }
+    }
+
+    return { dispatched, failed };
+  }
+
+  async recoverStaleNotificationProcessing(
+    olderThanMs = 60000
+  ): Promise<{ recovered: number; failed: number }> {
+    const cutoff = new Date(Date.now() - olderThanMs);
+    const staleEvents = await this.prisma.outboxEvent.findMany({
+      where: {
+        event_type: NOTIFICATION_EVENT,
+        status: OutboxStatusEnum.PROCESSING,
+        scheduled_at: { lte: cutoff },
+      },
+    });
+
+    let recovered = 0;
+    let failed = 0;
+    for (const event of staleEvents) {
+      const nextAttempts = event.attempts + 1;
+      const isExhausted = nextAttempts >= 3;
+      const updateResult = await this.prisma.outboxEvent.updateMany({
+        where: {
+          id: event.id,
+          status: OutboxStatusEnum.PROCESSING,
+          scheduled_at: event.scheduled_at,
+          attempts: event.attempts,
+        },
+        data: {
+          status: isExhausted ? OutboxStatusEnum.FAILED : OutboxStatusEnum.PENDING,
+          attempts: nextAttempts,
+          last_error: isExhausted
+            ? event.last_error || 'Exhausted processing attempts'
+            : 'Recovered from stale notification processing state',
+          scheduled_at: isExhausted
+            ? new Date()
+            : new Date(Date.now() + Math.min(1000 * Math.pow(2, nextAttempts), 30000)),
+        },
+      });
+      if (updateResult.count > 0) {
+        if (isExhausted) failed++;
+        else recovered++;
+      }
+    }
+    return { recovered, failed };
+  }
+
+  /**
    * Manually resets a FAILED outbox event back to PENDING.
    * Uses an atomic conditional FAILED-to-PENDING claim to prevent republishing completed events (Finding 1).
    * Uses exact match or delimited prefix cleanup to avoid prefix collisions (Finding 4).
@@ -334,6 +459,10 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
     if (this.queue) {
       await this.queue.close();
       this.queue = null;
+    }
+    if (this.notificationQueue) {
+      await this.notificationQueue.close();
+      this.notificationQueue = null;
     }
   }
 }

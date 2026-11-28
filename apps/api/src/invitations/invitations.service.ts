@@ -2,7 +2,7 @@ import { Injectable, Inject, Optional, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import { hashPassword } from '../auth/password.util';
-import { RoleEnum, InvitationStatusEnum, Prisma } from '@prisma/client';
+import { RoleEnum, InvitationStatusEnum, OutboxStatusEnum, Prisma } from '@prisma/client';
 import { randomBytes, createHash } from 'node:crypto';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import type { IVerificationDeliveryAdapter } from '@shipde/contracts';
@@ -11,6 +11,9 @@ import {
   AcceptInvitationRequest,
   InvitationItem,
   isActiveStatus,
+  NOTIFICATION_EVENT,
+  NotificationEventType,
+  buildNotificationOutboxKey,
 } from '@shipde/contracts';
 import { RateLimitService } from '../auth/rate-limit.service';
 import type { InvitationDispatchReservation } from '../auth/rate-limit.service';
@@ -743,6 +746,44 @@ export class InvitationsService {
               },
             },
           });
+
+          // FEAT-COM-09 D1: live EVT-COM-09-01 (invite_sent) committed atomically with invitation
+          if (tx.outboxEvent?.upsert) {
+            const fingerprint = `${actor.userId}:invite_sent:${inv.id}`;
+            const outboxKey = buildNotificationOutboxKey({
+              merchantId: actor.merchantId,
+              eventType: NotificationEventType.EVT_COM_09_01,
+              sourceFingerprint: fingerprint,
+            });
+            await tx.outboxEvent.upsert({
+              where: { idempotency_key: outboxKey },
+              create: {
+                event_type: NOTIFICATION_EVENT,
+                payload: {
+                  schema_version: 1,
+                  event: NotificationEventType.EVT_COM_09_01,
+                  occurred_at: new Date().toISOString(),
+                  merchant_id: actor.merchantId,
+                  is_resolution: false,
+                  source: {
+                    type: 'invitation',
+                    id: inv.id,
+                    branch_id: null,
+                    warehouse_id: null,
+                    carrier_account_id: null,
+                  },
+                  payload: {
+                    affected_user_id: actor.userId,
+                    change_kind: 'invite_sent',
+                  },
+                },
+                correlation_id: safeCorrelationId,
+                idempotency_key: outboxKey,
+                status: OutboxStatusEnum.PENDING,
+              },
+              update: {},
+            });
+          }
 
           return inv;
         },
@@ -1909,6 +1950,44 @@ export class InvitationsService {
               },
             },
           });
+
+          // FEAT-COM-09 D1: live EVT-COM-09-01 (invite_accepted) committed atomically
+          if (tx.outboxEvent?.upsert) {
+            const fingerprint = `${newUser.id}:invite_accepted:${invitation.id}`;
+            const outboxKey = buildNotificationOutboxKey({
+              merchantId: invitation.merchant_id,
+              eventType: NotificationEventType.EVT_COM_09_01,
+              sourceFingerprint: fingerprint,
+            });
+            await tx.outboxEvent.upsert({
+              where: { idempotency_key: outboxKey },
+              create: {
+                event_type: NOTIFICATION_EVENT,
+                payload: {
+                  schema_version: 1,
+                  event: NotificationEventType.EVT_COM_09_01,
+                  occurred_at: now.toISOString(),
+                  merchant_id: invitation.merchant_id,
+                  is_resolution: false,
+                  source: {
+                    type: 'invitation',
+                    id: invitation.id,
+                    branch_id: null,
+                    warehouse_id: null,
+                    carrier_account_id: null,
+                  },
+                  payload: {
+                    affected_user_id: newUser.id,
+                    change_kind: 'invite_accepted',
+                  },
+                },
+                correlation_id: safeCorrelationId,
+                idempotency_key: outboxKey,
+                status: OutboxStatusEnum.PENDING,
+              },
+              update: {},
+            });
+          }
 
           return newUser;
         },

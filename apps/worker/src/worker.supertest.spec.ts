@@ -9,6 +9,7 @@ import { RedisService } from './redis/redis.service';
 import { StorageService } from './storage/storage.service';
 import { SmokeWorker } from './queue/smoke.worker';
 import { OutboxDispatcher } from './dispatcher/outbox.dispatcher';
+import { NotificationsWorker } from './notifications/notifications.worker';
 import { APP_CONFIG } from './config.token';
 
 async function runWorkerSupertestSuite() {
@@ -58,6 +59,11 @@ async function runWorkerSupertestSuite() {
       onModuleDestroy: async () => {},
     })
     .overrideProvider(OutboxDispatcher)
+    .useValue({
+      onModuleInit: async () => {},
+      onModuleDestroy: async () => {},
+    })
+    .overrideProvider(NotificationsWorker)
     .useValue({
       onModuleInit: async () => {},
       onModuleDestroy: async () => {},
@@ -134,6 +140,11 @@ async function runWorkerSupertestSuite() {
         onModuleDestroy: async () => {},
       })
       .overrideProvider(OutboxDispatcher)
+      .useValue({
+        onModuleInit: async () => {},
+        onModuleDestroy: async () => {},
+      })
+      .overrideProvider(NotificationsWorker)
       .useValue({
         onModuleInit: async () => {},
         onModuleDestroy: async () => {},

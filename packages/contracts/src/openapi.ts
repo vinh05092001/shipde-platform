@@ -1444,6 +1444,102 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/notifications': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['listNotifications'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/notifications/unread-count': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['getNotificationUnreadCount'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/notifications/{id}/read': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['markNotificationRead'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/notifications/read-all': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['markAllNotificationsRead'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/admin/notification-deliveries': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['listAdminNotificationDeliveries'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/admin/notification-deliveries/{delivery_id}/redeliver': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['redeliverNotificationDelivery'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2669,6 +2765,120 @@ export interface components {
     SearchResponse: {
       success: boolean;
       data: components['schemas']['SearchResponseData'];
+      meta: components['schemas']['Meta'];
+    };
+    NotificationItem: {
+      /** Format: uuid */
+      id: string;
+      event_type: string;
+      event_label: string;
+      /** @enum {string} */
+      severity: 'critical' | 'high' | 'medium';
+      title: string;
+      body: string;
+      source_type: string;
+      source_id: string;
+      group_key: string;
+      digest_count: number;
+      link_path: string;
+      /** @enum {string} */
+      status: 'ACTIVE' | 'RESOLVED';
+      /** Format: date-time */
+      read_at: string | null;
+      /** Format: date-time */
+      resolved_at: string | null;
+      /** Format: date-time */
+      created_at: string;
+    };
+    NotificationListResponse: {
+      data: {
+        items: components['schemas']['NotificationItem'][];
+        next_cursor: string | null;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    NotificationUnreadCountResponse: {
+      data: {
+        unread_count: number;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    NotificationReadResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        /** @enum {string} */
+        status: 'ACTIVE' | 'RESOLVED';
+        /** Format: date-time */
+        read_at: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    NotificationReadAllResponse: {
+      data: {
+        updated_count: number;
+        /** Format: date-time */
+        read_at: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    NotificationDeliveryRecoveryItem: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      notification_id: string;
+      event_type: string;
+      /** @enum {string} */
+      severity: 'critical' | 'high' | 'medium';
+      title: string;
+      recipient_email_masked: string | null;
+      /** @enum {string} */
+      channel: 'email';
+      /** @enum {string} */
+      state:
+        | 'PENDING'
+        | 'IN_FLIGHT'
+        | 'SENT'
+        | 'FAILED'
+        | 'UNKNOWN'
+        | 'SKIPPED_NO_VERIFIED_EMAIL'
+        | 'NOT_CONFIGURED'
+        | 'DEAD_LETTER';
+      attempts: number;
+      provider_submission_id: string | null;
+      provider_message_id: string | null;
+      last_error_code: string | null;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    NotificationDeliveryListResponse: {
+      data: {
+        items: components['schemas']['NotificationDeliveryRecoveryItem'][];
+        next_cursor: string | null;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    RedeliverNotificationDeliveryInput: {
+      expected_attempt: number;
+      expected_provider_submission_id: string;
+      idempotency_key: string;
+      /** @enum {string} */
+      resolution: 'MARK_SENT' | 'RELEASE_FOR_RETRY';
+      provider_message_id?: string | null;
+    };
+    RedeliverNotificationDeliveryResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        /** Format: uuid */
+        notification_id: string;
+        state: string;
+        attempts: number;
+        provider_submission_id: string | null;
+        provider_message_id: string | null;
+      };
       meta: components['schemas']['Meta'];
     };
   };
@@ -5013,6 +5223,164 @@ export interface operations {
         };
         content?: never;
       };
+      409: components['responses']['Error'];
+    };
+  };
+  listNotifications: {
+    parameters: {
+      query?: {
+        cursor?: string;
+        limit?: number;
+        unread_only?: boolean;
+        severity?: 'critical' | 'high' | 'medium';
+        status?: 'ACTIVE' | 'RESOLVED';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Scoped notification center list */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['NotificationListResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  getNotificationUnreadCount: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Scoped unread notification count */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['NotificationUnreadCountResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  markNotificationRead: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Notification marked read (idempotent) */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['NotificationReadResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  markAllNotificationsRead: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description All scoped notifications marked read */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['NotificationReadAllResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  listAdminNotificationDeliveries: {
+    parameters: {
+      query?: {
+        state?: 'UNKNOWN' | 'DEAD_LETTER';
+        channel?: 'email';
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Recoverable notification email deliveries */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['NotificationDeliveryListResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  redeliverNotificationDelivery: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        delivery_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RedeliverNotificationDeliveryInput'];
+      };
+    };
+    responses: {
+      /** @description Delivery recovery resolution applied */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['RedeliverNotificationDeliveryResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
       409: components['responses']['Error'];
     };
   };
