@@ -1,6 +1,8 @@
 import 'reflect-metadata';
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
+import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   NotificationChannelEnum,
   NotificationDeliveryStateEnum,
@@ -417,43 +419,95 @@ test('FEAT-COM-09 Slice A Worker Integration: D3/D4/D5/D6 processor, email state
         await prisma.outboxEvent.delete({ where: { id: staleOutboxRow.id } }).catch(() => {});
       }
 
-      // 8. P1 #1: Operator RELEASE_FOR_RETRY AT configured cap (attempts=2 -> reserved attempt=3)
-      //    durable outbox -> real Redis/BullMQ -> NotificationsWorker -> EXACTLY 1 provider call with reserved submissionId, replay = 0 extra calls
+      // 8. P1 #1 combined path: real HTTP RELEASE_FOR_RETRY AT configured cap (UNKNOWN attempts=2 ->
+      //    reserved attempt=3) -> the outbox row that request committed -> real dispatcher -> BullMQ/Redis
+      //    -> NotificationsWorker -> EXACTLY 1 fixture-transport call with the reserved submissionId.
+      //    Replays (HTTP same idempotency key, worker same outbox job, processor same envelope) = 0 extra calls.
+      //    Transport evidence is fixture-only (ControlledNotificationEmailTransport), not the production adapter.
       controlledTransport.mode = 'SENT';
       controlledTransport.calls.length = 0;
-      const reservedAttempt = 3; // exceeds emailMaxAttempts (2)
+      const atCapAttempt = 2; // equals emailMaxAttempts (2)
+      const reservedAttempt = atCapAttempt + 1;
+      const atCapSubId = buildProviderSubmissionId(dlRow.notification_id, atCapAttempt);
       const reservedSubId = buildProviderSubmissionId(dlRow.notification_id, reservedAttempt);
       await prisma.notificationChannelDelivery.update({
         where: { id: dlRow.id },
         data: {
-          state: NotificationDeliveryStateEnum.PENDING,
-          attempts: reservedAttempt,
-          provider_submission_id: reservedSubId,
+          state: NotificationDeliveryStateEnum.UNKNOWN,
+          attempts: atCapAttempt,
+          provider_submission_id: atCapSubId,
+          provider_message_id: null,
         },
       });
-      const retryOutboxRow = await prisma.outboxEvent.create({
-        data: {
-          event_type: NOTIFICATION_EVENT,
-          payload: {
-            schema_version: 1,
-            kind: 'DELIVERY_RETRY',
-            merchant_id: m2.id,
-            notification_id: dlRow.notification_id,
-            delivery_id: dlRow.id,
-            expected_attempt: reservedAttempt,
-            provider_submission_id: reservedSubId,
-            occurred_at: new Date().toISOString(),
+      const repoRoot = path.resolve(process.cwd(), '..', '..');
+      const httpLeg = spawnSync(
+        'pnpm',
+        [
+          '--dir',
+          path.join(repoRoot, 'apps', 'api'),
+          'exec',
+          'tsx',
+          '--tsconfig',
+          'tsconfig.json',
+          'src/notifications/notifications.release-e2e.spec.ts',
+        ],
+        {
+          encoding: 'utf8',
+          shell: process.platform === 'win32',
+          env: {
+            ...process.env,
+            RELEASE_E2E_INPUT: JSON.stringify({
+              merchantId: m2.id,
+              ownerUserId: ownerM2.id,
+              deliveryId: dlRow.id,
+              expectedAttempt: atCapAttempt,
+              expectedSubmissionId: atCapSubId,
+              idempotencyKey: `idem-e2e-release-${suffix}`,
+            }),
           },
-          correlation_id: 'corr-retry-at-cap',
+          timeout: 120_000,
+        }
+      );
+      const resultLine = (httpLeg.stdout || '')
+        .split(/\r?\n/)
+        .find((l) => l.startsWith('RELEASE_E2E_RESULT '));
+      assert.ok(
+        resultLine,
+        `HTTP leg produced no result (exit ${httpLeg.status}): ${(httpLeg.stderr || '').slice(-400)}`
+      );
+      const httpResult = JSON.parse(resultLine.slice('RELEASE_E2E_RESULT '.length));
+      assert.equal(httpResult.releaseStatus, 200, JSON.stringify(httpResult.release));
+      assert.equal(httpResult.release.state, 'PENDING');
+      assert.equal(httpResult.release.attempts, reservedAttempt);
+      assert.equal(httpResult.release.provider_submission_id, reservedSubId);
+      assert.equal(httpResult.replayStatus, 200, 'HTTP replay of the same idempotency key');
+      assert.equal(httpResult.replay.attempts, reservedAttempt, 'HTTP replay must not re-reserve');
+      // The exact row the HTTP request committed (no manual insert)
+      const retryOutboxRow = await prisma.outboxEvent.findUnique({
+        where: {
           idempotency_key: buildDeliveryRetryOutboxKey({
             merchantId: m2.id,
             deliveryId: dlRow.id,
             attempt: reservedAttempt,
           }),
-          status: OutboxStatusEnum.PENDING,
-          scheduled_at: new Date(Date.now() - 60_000),
         },
       });
+      assert.ok(
+        retryOutboxRow,
+        'RELEASE_FOR_RETRY must have committed its DELIVERY_RETRY outbox row'
+      );
+      assert.equal(retryOutboxRow.status, OutboxStatusEnum.PENDING);
+      assert.equal((retryOutboxRow.payload as any).provider_submission_id, reservedSubId);
+      assert.equal(
+        await prisma.outboxEvent.count({
+          where: {
+            idempotency_key: { contains: `delivery-retry` },
+            payload: { path: ['delivery_id'], equals: dlRow.id },
+          },
+        }),
+        1,
+        'HTTP replay must not commit a second retry outbox row'
+      );
       try {
         const retryDisp = await dispatcher.dispatchPendingNotifications(10);
         assert.ok(retryDisp.dispatched >= 1);
@@ -475,9 +529,23 @@ test('FEAT-COM-09 Slice A Worker Integration: D3/D4/D5/D6 processor, email state
         });
         assert.equal(sentAfterRetry?.state, NotificationDeliveryStateEnum.SENT);
 
-        // Replay DELIVERY_RETRY -> 0 extra provider calls
+        // Replay the same committed outbox job through the real worker entry point -> 0 extra calls
+        await worker.handleJob({
+          outboxId: retryOutboxRow.id,
+          attempt: retryDone?.attempts ?? 1,
+          correlationId: 'corr-retry-job-replay',
+          eventType: NOTIFICATION_EVENT,
+          payload: retryOutboxRow.payload as Record<string, unknown>,
+          idempotencyKey: retryOutboxRow.idempotency_key,
+        });
+        assert.equal(controlledTransport.calls.length, 1, 'Worker job replay must not resend');
+        // Replay the same envelope directly in the processor -> 0 extra calls
         await processor.processEnvelope(retryOutboxRow.payload, 'corr-retry-replay');
         assert.equal(controlledTransport.calls.length, 1);
+        const stillPublished = await prisma.outboxEvent.findUnique({
+          where: { id: retryOutboxRow.id },
+        });
+        assert.equal(stillPublished?.status, OutboxStatusEnum.PUBLISHED);
       } finally {
         await prisma.outboxEvent.delete({ where: { id: retryOutboxRow.id } }).catch(() => {});
       }
