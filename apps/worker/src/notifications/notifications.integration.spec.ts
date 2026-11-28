@@ -14,7 +14,9 @@ import { NotificationsWorker } from './notifications.worker';
 import {
   NOTIFICATION_EVENT,
   NOTIFICATION_QUEUE_NAME,
+  buildDeliveryRetryOutboxKey,
   buildNotificationOutboxKey,
+  buildProviderSubmissionId,
 } from '@shipde/contracts';
 import { OutboxStatusEnum } from '@prisma/client';
 import { Queue } from 'bullmq';
@@ -414,6 +416,191 @@ test('FEAT-COM-09 Slice A Worker Integration: D3/D4/D5/D6 processor, email state
       } finally {
         await prisma.outboxEvent.delete({ where: { id: staleOutboxRow.id } }).catch(() => {});
       }
+
+      // 8. P1 #1: Operator RELEASE_FOR_RETRY AT configured cap (attempts=2 -> reserved attempt=3)
+      //    durable outbox -> real Redis/BullMQ -> NotificationsWorker -> EXACTLY 1 provider call with reserved submissionId, replay = 0 extra calls
+      controlledTransport.mode = 'SENT';
+      controlledTransport.calls.length = 0;
+      const reservedAttempt = 3; // exceeds emailMaxAttempts (2)
+      const reservedSubId = buildProviderSubmissionId(dlRow.notification_id, reservedAttempt);
+      await prisma.notificationChannelDelivery.update({
+        where: { id: dlRow.id },
+        data: {
+          state: NotificationDeliveryStateEnum.PENDING,
+          attempts: reservedAttempt,
+          provider_submission_id: reservedSubId,
+        },
+      });
+      const retryOutboxRow = await prisma.outboxEvent.create({
+        data: {
+          event_type: NOTIFICATION_EVENT,
+          payload: {
+            schema_version: 1,
+            kind: 'DELIVERY_RETRY',
+            merchant_id: m2.id,
+            notification_id: dlRow.notification_id,
+            delivery_id: dlRow.id,
+            expected_attempt: reservedAttempt,
+            provider_submission_id: reservedSubId,
+            occurred_at: new Date().toISOString(),
+          },
+          correlation_id: 'corr-retry-at-cap',
+          idempotency_key: buildDeliveryRetryOutboxKey({
+            merchantId: m2.id,
+            deliveryId: dlRow.id,
+            attempt: reservedAttempt,
+          }),
+          status: OutboxStatusEnum.PENDING,
+          scheduled_at: new Date(Date.now() - 60_000),
+        },
+      });
+      try {
+        const retryDisp = await dispatcher.dispatchPendingNotifications(10);
+        assert.ok(retryDisp.dispatched >= 1);
+        const retryDeadline = Date.now() + 10000;
+        let retryDone = await prisma.outboxEvent.findUnique({ where: { id: retryOutboxRow.id } });
+        while (retryDone?.status !== OutboxStatusEnum.PUBLISHED && Date.now() < retryDeadline) {
+          await new Promise((r) => setTimeout(r, 100));
+          retryDone = await prisma.outboxEvent.findUnique({ where: { id: retryOutboxRow.id } });
+        }
+        assert.equal(retryDone?.status, OutboxStatusEnum.PUBLISHED);
+        assert.equal(
+          controlledTransport.calls.length,
+          1,
+          'RELEASE_FOR_RETRY at cap must execute exactly 1 provider call'
+        );
+        assert.equal(controlledTransport.calls[0].submissionId, reservedSubId);
+        const sentAfterRetry = await prisma.notificationChannelDelivery.findUnique({
+          where: { id: dlRow.id },
+        });
+        assert.equal(sentAfterRetry?.state, NotificationDeliveryStateEnum.SENT);
+
+        // Replay DELIVERY_RETRY -> 0 extra provider calls
+        await processor.processEnvelope(retryOutboxRow.payload, 'corr-retry-replay');
+        assert.equal(controlledTransport.calls.length, 1);
+      } finally {
+        await prisma.outboxEvent.delete({ where: { id: retryOutboxRow.id } }).catch(() => {});
+      }
+
+      // 9. P1 #2: Transport throw transitions IN_FLIGHT -> UNKNOWN + stranded IN_FLIGHT crash recovery -> UNKNOWN (no re-send)
+      const throwingTransport = {
+        send: async () => {
+          throw new Error('Simulated socket hangup after SMTP DATA');
+        },
+      };
+      const crashProcessor = new NotificationProcessor(prisma, config, throwingTransport);
+      const envThrow = buildFixtureNotificationEnvelope('EVT-COM-09-02', {
+        merchantId: m2.id,
+        sourceId: ca1,
+        carrierAccountId: ca1,
+        incidentId: 'inc-throw-3',
+      });
+      await crashProcessor.processEnvelope(envThrow, 'corr-throw');
+      const thrownDel = await prisma.notificationChannelDelivery.findFirst({
+        where: {
+          channel: NotificationChannelEnum.EMAIL,
+          notification: { merchant_id: m2.id, group_key: `${ca1}:expiring:inc-throw-3` },
+        },
+      });
+      assert.equal(thrownDel?.state, NotificationDeliveryStateEnum.UNKNOWN);
+      assert.equal(thrownDel?.last_error_code, 'TRANSPORT_EXCEPTION_UNKNOWN');
+
+      // Simulate worker crash leaving row stranded in IN_FLIGHT -> recoverStaleInFlightDeliveries moves to UNKNOWN
+      await prisma.notificationChannelDelivery.update({
+        where: { id: thrownDel!.id },
+        data: {
+          state: NotificationDeliveryStateEnum.IN_FLIGHT,
+          updated_at: new Date(Date.now() - 120_000),
+        },
+      });
+      const recRes = await processor.recoverStaleInFlightDeliveries(60_000, new Date());
+      assert.ok(recRes.recoveredCount >= 1);
+      const recoveredDel = await prisma.notificationChannelDelivery.findUnique({
+        where: { id: thrownDel!.id },
+      });
+      assert.equal(recoveredDel?.state, NotificationDeliveryStateEnum.UNKNOWN);
+      assert.equal(recoveredDel?.last_error_code, 'WORKER_CRASH_AMBIGUOUS');
+
+      // 10. P1 #4: Durable digest replay deduplication (same outboxId = no double-count; distinct outboxId = increment)
+      const envDigest1 = buildFixtureNotificationEnvelope('EVT-COM-09-10', {
+        merchantId: m2.id,
+        digestWindow: '2026-11-28',
+        queueRevision: 1,
+      });
+      // Add an ACCOUNTANT in m2 to receive EVT-COM-09-10
+      const acctM2 = await prisma.user.create({
+        data: {
+          merchant_id: m2.id,
+          email: `acctm2.${suffix}@shipde.vn`,
+          email_verified_at: new Date(),
+          full_name: 'Accountant M2',
+          password_hash: 'hash',
+          role: RoleEnum.ACCOUNTANT,
+          status: 'active',
+          carrier_account_scopes: ['*'],
+        },
+      });
+      await processor.processEnvelope(envDigest1, 'corr-d1', new Date(), 'outbox-digest-1');
+      // Replay exact same outboxId -> digest_count MUST stay 1
+      await processor.processEnvelope(envDigest1, 'corr-d1-replay', new Date(), 'outbox-digest-1');
+      const dAfterReplay = await prisma.notification.findFirst({
+        where: { merchant_id: m2.id, recipient_user_id: acctM2.id, event_type: 'EVT-COM-09-10' },
+      });
+      assert.equal(
+        dAfterReplay?.digest_count,
+        1,
+        'Replaying same outboxId must not increment digest_count'
+      );
+      // Distinct event in same digest window -> digest_count increments to 2
+      const envDigest2 = buildFixtureNotificationEnvelope('EVT-COM-09-10', {
+        merchantId: m2.id,
+        digestWindow: '2026-11-28',
+        queueRevision: 2,
+      });
+      await processor.processEnvelope(envDigest2, 'corr-d2', new Date(), 'outbox-digest-2');
+      const dAfterSecond = await prisma.notification.findFirst({
+        where: { merchant_id: m2.id, recipient_user_id: acctM2.id, event_type: 'EVT-COM-09-10' },
+      });
+      assert.equal(
+        dAfterSecond?.digest_count,
+        2,
+        'Distinct event in same digest window must increment digest_count'
+      );
+
+      // Cross-midnight replay for EVT-COM-09-08 with digest_window: null must stay 1 row & digest_count=1.
+      // Recipient timezone is the schema default Asia/Ho_Chi_Minh (UTC+7): 16:55Z/17:05Z are 23:55/00:05 local.
+      const envReturnNull = buildFixtureNotificationEnvelope('EVT-COM-09-08', {
+        merchantId: m1.id,
+        sourceId: `ret-null-${suffix}`,
+        warehouseId: whA,
+      });
+      (envReturnNull.payload as any).digest_window = null;
+      await processor.processEnvelope(
+        envReturnNull,
+        'corr-ret-1',
+        new Date('2026-11-28T16:55:00Z'),
+        'outbox-ret-null-1'
+      );
+      await processor.processEnvelope(
+        envReturnNull,
+        'corr-ret-2',
+        new Date('2026-11-28T17:05:00Z'),
+        'outbox-ret-null-1'
+      );
+      const retNullRows = await prisma.notification.findMany({
+        where: {
+          merchant_id: m1.id,
+          recipient_user_id: whUserA.id,
+          event_type: 'EVT-COM-09-08',
+          source_id: `ret-null-${suffix}`,
+        },
+      });
+      assert.equal(
+        retNullRows.length,
+        1,
+        'Cross-midnight replay with null digest_window must not duplicate'
+      );
+      assert.equal(retNullRows[0].digest_count, 1);
     } finally {
       await worker.onModuleDestroy().catch(() => {});
       await realQueue.obliterate({ force: true }).catch(() => {});

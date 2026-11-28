@@ -80,7 +80,12 @@ export class NotificationsWorker implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const result = await this.processor.processEnvelope(data.payload, correlationId);
+    const result = await this.processor.processEnvelope(
+      data.payload,
+      correlationId,
+      new Date(),
+      data.outboxId
+    );
     if (result.status === 'DEAD_LETTER_INVALID_CONTRACT') {
       await this.prisma.outboxEvent.updateMany({
         where: {

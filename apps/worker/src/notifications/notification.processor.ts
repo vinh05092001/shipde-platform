@@ -8,10 +8,12 @@ import {
 } from '@prisma/client';
 import {
   NOTIFICATION_MATRIX_RULES,
+  NotificationDeliveryRetryEnvelope,
   NotificationEventType,
   NotificationOutboxEnvelope,
   SEVERITY_RANK,
   buildProviderSubmissionId,
+  isDeliveryRetryEnvelope,
   maskNotificationEmail,
   validateNotificationEnvelope,
 } from '@shipde/contracts';
@@ -125,9 +127,17 @@ export class NotificationProcessor {
   async processEnvelope(
     rawEnvelope: unknown,
     correlationIdRaw: string,
-    now: Date = new Date()
+    now: Date = new Date(),
+    outboxId?: string
   ): Promise<ProcessNotificationResult> {
     const correlationId = normalizeCorrelationId(correlationIdRaw);
+
+    // D5: Handle explicit operator RELEASE_FOR_RETRY durable outbox job
+    if (isDeliveryRetryEnvelope(rawEnvelope)) {
+      await this.processDeliveryRetry(rawEnvelope, correlationId, now);
+      return { status: 'PROCESSED', recipientCount: 1, resolvedCount: 0 };
+    }
+
     const validation = validateNotificationEnvelope(rawEnvelope);
     if (!validation.valid || !validation.groupKey) {
       console.error(
@@ -205,41 +215,90 @@ export class NotificationProcessor {
         continue;
       }
 
-      const notification = await this.prisma.notification.upsert({
-        where: {
-          merchant_id_event_type_group_key_recipient_user_id: {
-            merchant_id: envelope.merchant_id,
-            event_type: envelope.event,
-            group_key: validation.groupKey,
-            recipient_user_id: user.id,
-          },
-        },
-        create: {
-          merchant_id: envelope.merchant_id,
-          recipient_user_id: user.id,
-          event_type: envelope.event,
-          severity: severityEnum,
-          severity_rank: severityRank,
-          title: snapshot.title,
-          body: snapshot.body,
-          source_type: envelope.source.type,
-          source_id: envelope.source.id,
-          source_branch_id: envelope.source.branch_id,
-          source_warehouse_id: envelope.source.warehouse_id,
-          source_carrier_account_id: envelope.source.carrier_account_id,
-          group_key: validation.groupKey,
-          digest_count: 1,
-          link_path: snapshot.linkPath,
-          status: NotificationStatusEnum.ACTIVE,
-          retention_until: retentionUntil,
-        },
-        update: rule.digest
-          ? {
-              digest_count: { increment: 1 },
-              body: snapshot.body,
+      // D6: Preserve frozen canonical validation.groupKey (immutable across midnight/timezone replay)
+      const effectiveGroupKey = validation.groupKey;
+
+      const contributionKey =
+        outboxId || `${envelope.event}:${envelope.source.id}:${envelope.occurred_at}`;
+
+      // D6 P1 #4: Single atomic transaction for digest group upsert + contribution dedupe + count increment
+      const notification = rule.digest
+        ? await this.prisma.$transaction(async (tx) => {
+            const base = await tx.notification.upsert({
+              where: {
+                merchant_id_event_type_group_key_recipient_user_id: {
+                  merchant_id: envelope.merchant_id,
+                  event_type: envelope.event,
+                  group_key: effectiveGroupKey,
+                  recipient_user_id: user.id,
+                },
+              },
+              create: {
+                merchant_id: envelope.merchant_id,
+                recipient_user_id: user.id,
+                event_type: envelope.event,
+                severity: severityEnum,
+                severity_rank: severityRank,
+                title: snapshot.title,
+                body: snapshot.body,
+                source_type: envelope.source.type,
+                source_id: envelope.source.id,
+                source_branch_id: envelope.source.branch_id,
+                source_warehouse_id: envelope.source.warehouse_id,
+                source_carrier_account_id: envelope.source.carrier_account_id,
+                group_key: effectiveGroupKey,
+                digest_count: 0,
+                link_path: snapshot.linkPath,
+                status: NotificationStatusEnum.ACTIVE,
+                retention_until: retentionUntil,
+              },
+              update: {},
+            });
+            const inserted = await tx.notificationDigestContribution.createMany({
+              data: [{ notification_id: base.id, contribution_key: contributionKey }],
+              skipDuplicates: true,
+            });
+            if (inserted.count > 0) {
+              return tx.notification.update({
+                where: { id: base.id },
+                data: {
+                  digest_count: { increment: inserted.count },
+                  body: snapshot.body,
+                },
+              });
             }
-          : {},
-      });
+            return base;
+          })
+        : await this.prisma.notification.upsert({
+            where: {
+              merchant_id_event_type_group_key_recipient_user_id: {
+                merchant_id: envelope.merchant_id,
+                event_type: envelope.event,
+                group_key: effectiveGroupKey,
+                recipient_user_id: user.id,
+              },
+            },
+            create: {
+              merchant_id: envelope.merchant_id,
+              recipient_user_id: user.id,
+              event_type: envelope.event,
+              severity: severityEnum,
+              severity_rank: severityRank,
+              title: snapshot.title,
+              body: snapshot.body,
+              source_type: envelope.source.type,
+              source_id: envelope.source.id,
+              source_branch_id: envelope.source.branch_id,
+              source_warehouse_id: envelope.source.warehouse_id,
+              source_carrier_account_id: envelope.source.carrier_account_id,
+              group_key: effectiveGroupKey,
+              digest_count: 1,
+              link_path: snapshot.linkPath,
+              status: NotificationStatusEnum.ACTIVE,
+              retention_until: retentionUntil,
+            },
+            update: {},
+          });
 
       // 1. In-app channel delivery row
       if (shouldDeliverInApp) {
@@ -476,39 +535,53 @@ export class NotificationProcessor {
       return skipped.state;
     }
 
-    // Ensure row exists in PENDING
+    // Ensure row exists in PENDING (handle concurrent P2002 safely)
     if (!delivery) {
-      delivery = await this.prisma.notificationChannelDelivery.create({
-        data: {
-          notification_id: params.notificationId,
-          channel: NotificationChannelEnum.EMAIL,
-          state: NotificationDeliveryStateEnum.PENDING,
-          attempts: 0,
-          correlation_id: params.correlationId,
-        },
-      });
+      try {
+        delivery = await this.prisma.notificationChannelDelivery.create({
+          data: {
+            notification_id: params.notificationId,
+            channel: NotificationChannelEnum.EMAIL,
+            state: NotificationDeliveryStateEnum.PENDING,
+            attempts: 0,
+            correlation_id: params.correlationId,
+          },
+        });
+      } catch (err: any) {
+        if (err?.code !== 'P2002') throw err;
+        delivery = await this.prisma.notificationChannelDelivery.findUniqueOrThrow({
+          where: {
+            notification_id_channel: {
+              notification_id: params.notificationId,
+              channel: NotificationChannelEnum.EMAIL,
+            },
+          },
+        });
+      }
     }
 
     let current = delivery;
-    // Bounded automatic retry loop for FAILED only (never UNKNOWN!)
+    // Bounded automatic retry loop for FAILED/PENDING only (never UNKNOWN!)
     while (current.attempts < deliveryCfg.emailMaxAttempts) {
-      const nextAttempt = current.attempts === 0 ? 1 : current.attempts + 1;
-      const submissionId =
+      const prevAttempts = current.attempts;
+      const isReservedPending =
         current.state === NotificationDeliveryStateEnum.PENDING &&
-        current.provider_submission_id &&
-        current.attempts > 0
-          ? current.provider_submission_id
-          : buildProviderSubmissionId(params.notificationId, nextAttempt);
-      const attemptCount =
-        current.state === NotificationDeliveryStateEnum.PENDING &&
-        current.provider_submission_id &&
-        current.attempts > 0
-          ? current.attempts
-          : nextAttempt;
+        Boolean(current.provider_submission_id) &&
+        current.attempts > 0;
+      const attemptCount = isReservedPending ? current.attempts : current.attempts + 1;
+      const submissionId = isReservedPending
+        ? (current.provider_submission_id as string)
+        : buildProviderSubmissionId(params.notificationId, attemptCount);
 
-      // D5: Persist provider_submission_id BEFORE provider call
-      current = await this.prisma.notificationChannelDelivery.update({
-        where: { id: current.id },
+      // D5 P1 #2: Atomic CAS claim BEFORE calling provider (prevents concurrent double-send)
+      const claimed = await this.prisma.notificationChannelDelivery.updateMany({
+        where: {
+          id: current.id,
+          state: {
+            in: [NotificationDeliveryStateEnum.PENDING, NotificationDeliveryStateEnum.FAILED],
+          },
+          attempts: prevAttempts,
+        },
         data: {
           state: NotificationDeliveryStateEnum.IN_FLIGHT,
           attempts: attemptCount,
@@ -516,77 +589,33 @@ export class NotificationProcessor {
           correlation_id: params.correlationId,
         },
       });
+      if (claimed.count === 0) {
+        // Another worker claimed or finalized this row; re-read without sending
+        const latest = await this.prisma.notificationChannelDelivery.findUnique({
+          where: { id: current.id },
+        });
+        return latest?.state ?? current.state;
+      }
 
-      const res = await this.emailTransport.send({
-        to: params.recipientEmail,
+      const finalState = await this.executeClaimedEmailAttempt({
+        deliveryId: current.id,
+        merchantId: params.merchantId,
+        notificationId: params.notificationId,
+        attemptCount,
+        submissionId,
+        recipientEmail: params.recipientEmail,
         subject: params.subject,
         body: params.body,
-        submissionId,
         correlationId: params.correlationId,
+        now: params.now,
+        exhaustedOnFail: attemptCount >= deliveryCfg.emailMaxAttempts,
       });
 
-      if (res.outcome === 'NOT_CONFIGURED') {
-        current = await this.prisma.notificationChannelDelivery.update({
-          where: { id: current.id },
-          data: {
-            state: NotificationDeliveryStateEnum.NOT_CONFIGURED,
-            last_error_code: res.errorCode || 'EMAIL_PROVIDER_NOT_CONFIGURED',
-          },
-        });
-        break;
-      }
-
-      if (res.outcome === 'SENT' && res.providerMessageId) {
-        current = await this.prisma.notificationChannelDelivery.update({
-          where: { id: current.id },
-          data: {
-            state: NotificationDeliveryStateEnum.SENT,
-            provider_message_id: res.providerMessageId,
-            sent_at: params.now,
-            last_error_code: null,
-          },
-        });
-        break;
-      }
-
-      // D5: Timeout or response without message id -> UNKNOWN (NEVER FAILED, NEVER auto-retried)
-      if (res.outcome === 'UNKNOWN' || (res.outcome === 'SENT' && !res.providerMessageId)) {
-        current = await this.prisma.notificationChannelDelivery.update({
-          where: { id: current.id },
-          data: {
-            state: NotificationDeliveryStateEnum.UNKNOWN,
-            last_error_code: res.errorCode || 'MISSING_PROVIDER_MESSAGE_ID',
-          },
-        });
-        break;
-      }
-
-      // FAILED: retry if under configured maxAttempts, else escalate to DEAD_LETTER
-      const exhausted = attemptCount >= deliveryCfg.emailMaxAttempts;
-      current = await this.prisma.notificationChannelDelivery.update({
+      current = await this.prisma.notificationChannelDelivery.findUniqueOrThrow({
         where: { id: current.id },
-        data: {
-          state: exhausted
-            ? NotificationDeliveryStateEnum.DEAD_LETTER
-            : NotificationDeliveryStateEnum.FAILED,
-          last_error_code: res.errorCode || 'EMAIL_DELIVERY_FAILED',
-        },
       });
 
-      if (exhausted) {
-        await this.recordAudit(params.merchantId, {
-          action: 'NOTIFICATION_EMAIL_DEAD_LETTERED',
-          entityId: params.notificationId,
-          newValue: {
-            delivery_id: current.id,
-            channel: 'email',
-            attempts: attemptCount,
-            last_error_code: current.last_error_code,
-            recipient_email_masked: maskNotificationEmail(params.recipientEmail),
-            correlation_id: params.correlationId,
-          },
-          reason: 'Email delivery exhausted configured attempts and moved to DEAD_LETTER',
-        });
+      if (finalState !== NotificationDeliveryStateEnum.FAILED) {
         break;
       }
     }
@@ -607,6 +636,217 @@ export class NotificationProcessor {
     }
 
     return current.state;
+  }
+
+  /**
+   * D5 P1 #1: Executes an explicit operator RELEASE_FOR_RETRY outbox job for a reserved PENDING row
+   * (works even when attempts >= configured emailMaxAttempts; executes at most ONE provider call).
+   */
+  async processDeliveryRetry(
+    envelope: NotificationDeliveryRetryEnvelope,
+    correlationId: string,
+    now: Date = new Date()
+  ): Promise<NotificationDeliveryStateEnum | null> {
+    const delivery = await this.prisma.notificationChannelDelivery.findFirst({
+      where: {
+        id: envelope.delivery_id,
+        notification_id: envelope.notification_id,
+        channel: NotificationChannelEnum.EMAIL,
+        notification: { merchant_id: envelope.merchant_id },
+      },
+      include: {
+        notification: {
+          include: {
+            recipient: { select: { email: true, email_verified_at: true } },
+          },
+        },
+      },
+    });
+    if (!delivery) return null;
+
+    const recipientEmail = delivery.notification.recipient?.email;
+    const verifiedAt = delivery.notification.recipient?.email_verified_at;
+    if (!recipientEmail || !verifiedAt) {
+      await this.prisma.notificationChannelDelivery.updateMany({
+        where: {
+          id: delivery.id,
+          state: NotificationDeliveryStateEnum.PENDING,
+          attempts: envelope.expected_attempt,
+          provider_submission_id: envelope.provider_submission_id,
+        },
+        data: {
+          state: NotificationDeliveryStateEnum.SKIPPED_NO_VERIFIED_EMAIL,
+          last_error_code: 'NO_VERIFIED_EMAIL',
+          correlation_id: correlationId,
+        },
+      });
+      return NotificationDeliveryStateEnum.SKIPPED_NO_VERIFIED_EMAIL;
+    }
+
+    // Atomic CAS claim strictly matching the reserved (PENDING, expected_attempt, provider_submission_id)
+    const claimed = await this.prisma.notificationChannelDelivery.updateMany({
+      where: {
+        id: delivery.id,
+        state: NotificationDeliveryStateEnum.PENDING,
+        attempts: envelope.expected_attempt,
+        provider_submission_id: envelope.provider_submission_id,
+      },
+      data: {
+        state: NotificationDeliveryStateEnum.IN_FLIGHT,
+        correlation_id: correlationId,
+      },
+    });
+    if (claimed.count === 0) {
+      // Already claimed, finalized, or superseded -> do NOT send again
+      return delivery.state;
+    }
+
+    return this.executeClaimedEmailAttempt({
+      deliveryId: delivery.id,
+      merchantId: envelope.merchant_id,
+      notificationId: delivery.notification_id,
+      attemptCount: envelope.expected_attempt,
+      submissionId: envelope.provider_submission_id,
+      recipientEmail,
+      subject: delivery.notification.title,
+      body: delivery.notification.body,
+      correlationId,
+      now,
+      exhaustedOnFail: true, // Explicit operator release executes exactly 1 attempt; failure -> DEAD_LETTER
+    });
+  }
+
+  private async executeClaimedEmailAttempt(params: {
+    deliveryId: string;
+    merchantId: string;
+    notificationId: string;
+    attemptCount: number;
+    submissionId: string;
+    recipientEmail: string;
+    subject: string;
+    body: string;
+    correlationId: string;
+    now: Date;
+    exhaustedOnFail: boolean;
+  }): Promise<NotificationDeliveryStateEnum> {
+    let res: {
+      outcome: 'SENT' | 'FAILED' | 'UNKNOWN' | 'NOT_CONFIGURED';
+      providerMessageId?: string | null;
+      errorCode?: string | null;
+    };
+
+    try {
+      res = await this.emailTransport.send({
+        to: params.recipientEmail,
+        subject: params.subject,
+        body: params.body,
+        submissionId: params.submissionId,
+        correlationId: params.correlationId,
+      });
+    } catch {
+      // D5 P1 #2: Transport exception after potential send MUST resolve to UNKNOWN (never stuck IN_FLIGHT)
+      res = {
+        outcome: 'UNKNOWN',
+        providerMessageId: null,
+        errorCode: 'TRANSPORT_EXCEPTION_UNKNOWN',
+      };
+    }
+
+    const finalizeWhere = {
+      id: params.deliveryId,
+      state: NotificationDeliveryStateEnum.IN_FLIGHT,
+      attempts: params.attemptCount,
+      provider_submission_id: params.submissionId,
+    };
+
+    if (res.outcome === 'NOT_CONFIGURED') {
+      await this.prisma.notificationChannelDelivery.updateMany({
+        where: finalizeWhere,
+        data: {
+          state: NotificationDeliveryStateEnum.NOT_CONFIGURED,
+          last_error_code: res.errorCode || 'EMAIL_PROVIDER_NOT_CONFIGURED',
+        },
+      });
+      return NotificationDeliveryStateEnum.NOT_CONFIGURED;
+    }
+
+    if (res.outcome === 'SENT' && res.providerMessageId) {
+      await this.prisma.notificationChannelDelivery.updateMany({
+        where: finalizeWhere,
+        data: {
+          state: NotificationDeliveryStateEnum.SENT,
+          provider_message_id: res.providerMessageId,
+          sent_at: params.now,
+          last_error_code: null,
+        },
+      });
+      return NotificationDeliveryStateEnum.SENT;
+    }
+
+    if (res.outcome === 'UNKNOWN' || (res.outcome === 'SENT' && !res.providerMessageId)) {
+      await this.prisma.notificationChannelDelivery.updateMany({
+        where: finalizeWhere,
+        data: {
+          state: NotificationDeliveryStateEnum.UNKNOWN,
+          last_error_code: res.errorCode || 'MISSING_PROVIDER_MESSAGE_ID',
+        },
+      });
+      return NotificationDeliveryStateEnum.UNKNOWN;
+    }
+
+    const nextState = params.exhaustedOnFail
+      ? NotificationDeliveryStateEnum.DEAD_LETTER
+      : NotificationDeliveryStateEnum.FAILED;
+    const errorCode = res.errorCode || 'EMAIL_DELIVERY_FAILED';
+
+    await this.prisma.notificationChannelDelivery.updateMany({
+      where: finalizeWhere,
+      data: {
+        state: nextState,
+        last_error_code: errorCode,
+      },
+    });
+
+    if (params.exhaustedOnFail) {
+      await this.recordAudit(params.merchantId, {
+        action: 'NOTIFICATION_EMAIL_DEAD_LETTERED',
+        entityId: params.notificationId,
+        newValue: {
+          delivery_id: params.deliveryId,
+          channel: 'email',
+          attempts: params.attemptCount,
+          last_error_code: errorCode,
+          recipient_email_masked: maskNotificationEmail(params.recipientEmail),
+          correlation_id: params.correlationId,
+        },
+        reason: 'Email delivery exhausted configured attempts and moved to DEAD_LETTER',
+      });
+    }
+
+    return nextState;
+  }
+
+  /**
+   * D5 P1 #2: Recovers stranded IN_FLIGHT email attempts after worker crash to UNKNOWN
+   * without re-sending, surfacing them in GET /api/v1/admin/notification-deliveries.
+   */
+  async recoverStaleInFlightDeliveries(
+    olderThanMs = 60000,
+    now: Date = new Date()
+  ): Promise<{ recoveredCount: number }> {
+    const cutoff = new Date(now.getTime() - olderThanMs);
+    const res = await this.prisma.notificationChannelDelivery.updateMany({
+      where: {
+        channel: NotificationChannelEnum.EMAIL,
+        state: NotificationDeliveryStateEnum.IN_FLIGHT,
+        updated_at: { lte: cutoff },
+      },
+      data: {
+        state: NotificationDeliveryStateEnum.UNKNOWN,
+        last_error_code: 'WORKER_CRASH_AMBIGUOUS',
+      },
+    });
+    return { recoveredCount: res.count };
   }
 
   /**

@@ -1,4 +1,4 @@
-import { Injectable, Inject, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, Optional, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -21,6 +21,7 @@ import {
 import { OutboxStatusEnum, OutboxEvent } from '@prisma/client';
 import { SmokeJobData } from '../queue/smoke.worker';
 import { NotificationJobData } from '../notifications/notifications.worker';
+import { NotificationProcessor } from '../notifications/notification.processor';
 
 @Injectable()
 export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
@@ -32,7 +33,8 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     @Inject(APP_CONFIG) config: AppConfig,
-    private readonly prisma: PrismaService
+    private readonly prisma: PrismaService,
+    @Optional() private readonly notificationProcessor?: NotificationProcessor
   ) {
     this.config = config;
   }
@@ -377,6 +379,12 @@ export class OutboxDispatcher implements OnModuleInit, OnModuleDestroy {
         else recovered++;
       }
     }
+
+    // FEAT-COM-09 D5: Single canonical caller for recovering stranded IN_FLIGHT email attempts to UNKNOWN
+    if (this.notificationProcessor) {
+      await this.notificationProcessor.recoverStaleInFlightDeliveries(olderThanMs);
+    }
+
     return { recovered, failed };
   }
 

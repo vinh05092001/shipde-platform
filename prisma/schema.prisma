@@ -988,9 +988,10 @@ model Notification {
   created_at                DateTime                 @default(now()) @db.Timestamptz
   updated_at                DateTime                 @updatedAt @db.Timestamptz
 
-  merchant                  Merchant                      @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
-  recipient                 User                          @relation("NotificationRecipient", fields: [recipient_user_id], references: [id], onDelete: Cascade)
+  merchant                  Merchant                         @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  recipient                 User                             @relation("NotificationRecipient", fields: [recipient_user_id], references: [id], onDelete: Cascade)
   deliveries                NotificationChannelDelivery[]
+  digest_contributions      NotificationDigestContribution[]
 
   @@unique([merchant_id, event_type, group_key, recipient_user_id])
   @@index([merchant_id, recipient_user_id, status, severity, created_at])
@@ -1032,6 +1033,18 @@ model NotificationRedeliverIdempotency {
   @@unique([merchant_id, delivery_id, idempotency_key])
   @@index([merchant_id, created_at])
   @@map("notification_redeliver_idempotency")
+}
+
+model NotificationDigestContribution {
+  id               String       @id @default(uuid()) @db.Uuid
+  notification_id  String       @db.Uuid
+  contribution_key String       @db.VarChar(255)
+  created_at       DateTime     @default(now()) @db.Timestamptz
+
+  notification     Notification @relation(fields: [notification_id], references: [id], onDelete: Cascade)
+
+  @@unique([notification_id, contribution_key])
+  @@map("notification_digest_contributions")
 }
 
 // ============================================================================

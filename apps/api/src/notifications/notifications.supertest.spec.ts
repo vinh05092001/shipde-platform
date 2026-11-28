@@ -387,23 +387,47 @@ test('FEAT-COM-09 Slice A API: list/count/read isolation, D1 live invite outbox,
     assert.equal(staleRes.status, 409);
     assert.equal(staleRes.body.error.code, 'STALE_DELIVERY_PRECONDITION');
 
-    // Valid RELEASE_FOR_RETRY -> 200 PENDING, attempt=2, new submission id
-    const releaseRes = await request(app.getHttpServer())
-      .post(`/api/v1/admin/notification-deliveries/${unknownDelivery.id}/redeliver`)
-      .set('Authorization', `Bearer ${owner1Token}`)
-      .send({
-        expected_attempt: 1,
-        expected_provider_submission_id: subId1,
-        idempotency_key: 'idem-release-1',
-        resolution: 'RELEASE_FOR_RETRY',
-        provider_message_id: null,
-      });
+    // Valid RELEASE_FOR_RETRY (concurrent identical pair -> BOTH 200 with same attempt=2 + durable DELIVERY_RETRY outbox row)
+    const [releaseRes, concurrentReleaseRes] = await Promise.all([
+      request(app.getHttpServer())
+        .post(`/api/v1/admin/notification-deliveries/${unknownDelivery.id}/redeliver`)
+        .set('Authorization', `Bearer ${owner1Token}`)
+        .send({
+          expected_attempt: 1,
+          expected_provider_submission_id: subId1,
+          idempotency_key: 'idem-release-1',
+          resolution: 'RELEASE_FOR_RETRY',
+          provider_message_id: null,
+        }),
+      request(app.getHttpServer())
+        .post(`/api/v1/admin/notification-deliveries/${unknownDelivery.id}/redeliver`)
+        .set('Authorization', `Bearer ${owner1Token}`)
+        .send({
+          expected_attempt: 1,
+          expected_provider_submission_id: subId1,
+          idempotency_key: 'idem-release-1',
+          resolution: 'RELEASE_FOR_RETRY',
+          provider_message_id: null,
+        }),
+    ]);
     assert.equal(releaseRes.status, 200);
+    assert.equal(concurrentReleaseRes.status, 200);
     assert.equal(releaseRes.body.data.state, 'PENDING');
     assert.equal(releaseRes.body.data.attempts, 2);
+    assert.equal(concurrentReleaseRes.body.data.attempts, 2);
     assert.equal(
       releaseRes.body.data.provider_submission_id,
       buildProviderSubmissionId(nCritical.id, 2)
+    );
+    const retryOutbox = await prisma.outboxEvent.findFirst({
+      where: {
+        event_type: NOTIFICATION_EVENT,
+        idempotency_key: { contains: `delivery-retry:${unknownDelivery.id}:2` },
+      },
+    });
+    assert.ok(
+      retryOutbox,
+      'RELEASE_FOR_RETRY must atomically enqueue durable DELIVERY_RETRY outbox row'
     );
 
     // Duplicate same idempotency_key + same params -> idempotent replay (does not increment attempts)

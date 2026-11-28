@@ -1705,5 +1705,108 @@ export interface RedeliverNotificationDeliveryRequest {
   provider_message_id: string | null;
 }
 
+/**
+ * FEAT-COM-09 D5: Durable outbox envelope emitted atomically on operator RELEASE_FOR_RETRY.
+ */
+export interface NotificationDeliveryRetryEnvelope {
+  schema_version: 1;
+  kind: 'DELIVERY_RETRY';
+  merchant_id: string;
+  notification_id: string;
+  delivery_id: string;
+  expected_attempt: number;
+  provider_submission_id: string;
+  occurred_at: string;
+}
+
+export function isDeliveryRetryEnvelope(raw: unknown): raw is NotificationDeliveryRetryEnvelope {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const obj = raw as Record<string, unknown>;
+  return (
+    obj.schema_version === 1 &&
+    obj.kind === 'DELIVERY_RETRY' &&
+    typeof obj.merchant_id === 'string' &&
+    obj.merchant_id.length > 0 &&
+    typeof obj.notification_id === 'string' &&
+    obj.notification_id.length > 0 &&
+    typeof obj.delivery_id === 'string' &&
+    obj.delivery_id.length > 0 &&
+    typeof obj.expected_attempt === 'number' &&
+    Number.isSafeInteger(obj.expected_attempt) &&
+    obj.expected_attempt >= 1 &&
+    typeof obj.provider_submission_id === 'string' &&
+    obj.provider_submission_id.length > 0
+  );
+}
+
+export function buildDeliveryRetryOutboxKey(params: {
+  merchantId: string;
+  deliveryId: string;
+  attempt: number;
+}): string {
+  return `com09:outbox:${params.merchantId}:delivery-retry:${params.deliveryId}:${params.attempt}`;
+}
+
+/**
+ * FEAT-COM-09 D5 / AC-11: Evaluates digest window, escalation tier and claim reminder tier
+ * in the recipient's IANA timezone using governed configuration.
+ */
+export function evaluateRecipientSchedule(params: {
+  timezone: string;
+  now: Date;
+  digestHourLocal: number;
+  escalationHours: readonly number[];
+  claimReminderHours: readonly number[];
+  eventAgeHours?: number;
+  hoursUntilDeadline?: number;
+}): {
+  localDate: string;
+  localHour: number;
+  digestDue: boolean;
+  escalationTier: number | null;
+  claimReminderTier: number | null;
+} {
+  let tz = params.timezone || 'Asia/Ho_Chi_Minh';
+  try {
+    Intl.DateTimeFormat('en-CA', { timeZone: tz });
+  } catch {
+    tz = 'Asia/Ho_Chi_Minh';
+  }
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(params.now);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+  const localDate = `${get('year')}-${get('month')}-${get('day')}`;
+  const localHour = Number(get('hour'));
+  const digestDue = localHour >= params.digestHourLocal;
+
+  let escalationTier: number | null = null;
+  if (typeof params.eventAgeHours === 'number' && params.eventAgeHours >= 0) {
+    const sorted = [...params.escalationHours].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length; i += 1) {
+      if (params.eventAgeHours >= sorted[i]) {
+        escalationTier = i + 1;
+      }
+    }
+  }
+
+  let claimReminderTier: number | null = null;
+  if (typeof params.hoursUntilDeadline === 'number') {
+    const sortedDesc = [...params.claimReminderHours].sort((a, b) => b - a);
+    for (let i = 0; i < sortedDesc.length; i += 1) {
+      if (params.hoursUntilDeadline <= sortedDesc[i]) {
+        claimReminderTier = i + 1;
+      }
+    }
+  }
+
+  return { localDate, localHour, digestDue, escalationTier, claimReminderTier };
+}
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

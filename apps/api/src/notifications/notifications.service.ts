@@ -5,14 +5,17 @@ import {
   NotificationDeliveryStateEnum,
   NotificationSeverityEnum,
   NotificationStatusEnum,
+  OutboxStatusEnum,
   Prisma,
   RoleEnum,
 } from '@prisma/client';
 import {
+  NOTIFICATION_EVENT,
   NOTIFICATION_MATRIX_RULES,
   NotificationEventType,
   NotificationSeverity,
   RedeliverNotificationDeliveryRequest,
+  buildDeliveryRetryOutboxKey,
   buildProviderSubmissionId,
   maskNotificationEmail,
 } from '@shipde/contracts';
@@ -617,9 +620,8 @@ export class NotificationsService {
       )
       .digest('hex');
 
-    return this.prisma.$transaction(async (tx) => {
-      // 1. Check durable request idempotency first
-      const existingIdem = await tx.notificationRedeliverIdempotency.findUnique({
+    const reconcileExistingIdempotency = async () => {
+      const raced = await this.prisma.notificationRedeliverIdempotency.findUnique({
         where: {
           merchant_id_delivery_id_idempotency_key: {
             merchant_id: merchantId,
@@ -628,55 +630,217 @@ export class NotificationsService {
           },
         },
       });
-
-      if (existingIdem) {
-        if (existingIdem.request_fingerprint !== requestFingerprint) {
-          throw new CanonicalApiException(
-            HttpStatus.CONFLICT,
-            'IDEMPOTENCY_CONFLICT',
-            'idempotency_key đã được dùng với tham số khác'
-          );
-        }
-        return {
-          data: existingIdem.response_snapshot,
-          meta: { correlation_id: correlationId, idempotent_replay: true },
-        };
-      }
-
-      // 2. Load delivery scoped to caller's merchant
-      const delivery = await tx.notificationChannelDelivery.findFirst({
-        where: {
-          id: deliveryId,
-          channel: NotificationChannelEnum.EMAIL,
-          notification: { merchant_id: merchantId },
-        },
-        include: { notification: true },
-      });
-
-      if (!delivery) {
+      if (!raced) return null;
+      if (raced.request_fingerprint !== requestFingerprint) {
         throw new CanonicalApiException(
-          HttpStatus.NOT_FOUND,
-          'NOT_FOUND',
-          'Không tìm thấy bản ghi gửi email thông báo'
+          HttpStatus.CONFLICT,
+          'IDEMPOTENCY_CONFLICT',
+          'idempotency_key đã được dùng với tham số khác'
         );
       }
+      return {
+        data: raced.response_snapshot,
+        meta: { correlation_id: correlationId, idempotent_replay: true },
+      };
+    };
 
-      // 3. Repeating same resolution when already in resulting state returns current row (D5)
-      if (
-        (body.resolution === 'MARK_SENT' &&
-          delivery.state === NotificationDeliveryStateEnum.SENT) ||
-        (body.resolution === 'RELEASE_FOR_RETRY' &&
-          (delivery.state === NotificationDeliveryStateEnum.PENDING ||
-            delivery.state === NotificationDeliveryStateEnum.IN_FLIGHT))
-      ) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // 1. Check durable request idempotency first
+        const existingIdem = await tx.notificationRedeliverIdempotency.findUnique({
+          where: {
+            merchant_id_delivery_id_idempotency_key: {
+              merchant_id: merchantId,
+              delivery_id: deliveryId,
+              idempotency_key: idemKey,
+            },
+          },
+        });
+
+        if (existingIdem) {
+          if (existingIdem.request_fingerprint !== requestFingerprint) {
+            throw new CanonicalApiException(
+              HttpStatus.CONFLICT,
+              'IDEMPOTENCY_CONFLICT',
+              'idempotency_key đã được dùng với tham số khác'
+            );
+          }
+          return {
+            data: existingIdem.response_snapshot,
+            meta: { correlation_id: correlationId, idempotent_replay: true },
+          };
+        }
+
+        // 2. Load delivery scoped to caller's merchant
+        const delivery = await tx.notificationChannelDelivery.findFirst({
+          where: {
+            id: deliveryId,
+            channel: NotificationChannelEnum.EMAIL,
+            notification: { merchant_id: merchantId },
+          },
+          include: { notification: true },
+        });
+
+        if (!delivery) {
+          throw new CanonicalApiException(
+            HttpStatus.NOT_FOUND,
+            'NOT_FOUND',
+            'Không tìm thấy bản ghi gửi email thông báo'
+          );
+        }
+
+        // 3. Repeating same resolution when already in resulting state returns current row (D5)
+        if (
+          (body.resolution === 'MARK_SENT' &&
+            delivery.state === NotificationDeliveryStateEnum.SENT) ||
+          (body.resolution === 'RELEASE_FOR_RETRY' &&
+            (delivery.state === NotificationDeliveryStateEnum.PENDING ||
+              delivery.state === NotificationDeliveryStateEnum.IN_FLIGHT))
+        ) {
+          const snapshot = {
+            id: delivery.id,
+            notification_id: delivery.notification_id,
+            state: delivery.state,
+            attempts: delivery.attempts,
+            provider_submission_id: delivery.provider_submission_id,
+            provider_message_id: delivery.provider_message_id,
+          };
+          await tx.notificationRedeliverIdempotency.create({
+            data: {
+              merchant_id: merchantId,
+              delivery_id: delivery.id,
+              idempotency_key: idemKey,
+              request_fingerprint: requestFingerprint,
+              response_snapshot: snapshot,
+            },
+          });
+          return { data: snapshot, meta: { correlation_id: correlationId } };
+        }
+
+        // 4. Only UNKNOWN or DEAD_LETTER rows may be transitioned
+        if (
+          delivery.state !== NotificationDeliveryStateEnum.UNKNOWN &&
+          delivery.state !== NotificationDeliveryStateEnum.DEAD_LETTER
+        ) {
+          throw new CanonicalApiException(
+            HttpStatus.CONFLICT,
+            'STALE_DELIVERY_PRECONDITION',
+            'Bản ghi không ở trạng thái UNKNOWN hoặc DEAD_LETTER',
+            false,
+            undefined,
+            undefined,
+            undefined,
+            {
+              current_state: delivery.state,
+              current_attempts: delivery.attempts,
+              current_provider_submission_id: delivery.provider_submission_id,
+            }
+          );
+        }
+
+        // 5. Enforce optimistic preconditions (expected_attempt & expected_provider_submission_id)
+        if (
+          delivery.attempts !== body.expected_attempt ||
+          delivery.provider_submission_id !== body.expected_provider_submission_id
+        ) {
+          throw new CanonicalApiException(
+            HttpStatus.CONFLICT,
+            'STALE_DELIVERY_PRECONDITION',
+            'STALE_DELIVERY_PRECONDITION: delivery attempt or submission ID does not match current state',
+            false,
+            undefined,
+            undefined,
+            undefined,
+            {
+              current_state: delivery.state,
+              current_attempts: delivery.attempts,
+              current_provider_submission_id: delivery.provider_submission_id,
+            }
+          );
+        }
+
+        const now = new Date();
+        let nextState: NotificationDeliveryStateEnum;
+        let nextAttempts = delivery.attempts;
+        let nextSubmissionId = delivery.provider_submission_id;
+        let nextProviderMsgId = delivery.provider_message_id;
+
+        if (body.resolution === 'MARK_SENT') {
+          nextState = NotificationDeliveryStateEnum.SENT;
+          if (body.provider_message_id) {
+            nextProviderMsgId = body.provider_message_id;
+          }
+        } else {
+          nextState = NotificationDeliveryStateEnum.PENDING;
+          nextAttempts = delivery.attempts + 1;
+          nextSubmissionId = buildProviderSubmissionId(delivery.notification_id, nextAttempts);
+          nextProviderMsgId = null;
+        }
+
+        const updatedCount = await tx.notificationChannelDelivery.updateMany({
+          where: {
+            id: delivery.id,
+            state: delivery.state,
+            attempts: body.expected_attempt,
+            provider_submission_id: body.expected_provider_submission_id,
+          },
+          data: {
+            state: nextState,
+            attempts: nextAttempts,
+            provider_submission_id: nextSubmissionId,
+            provider_message_id: nextProviderMsgId,
+            sent_at: body.resolution === 'MARK_SENT' ? now : null,
+            last_error_code: null,
+            correlation_id: correlationId,
+          },
+        });
+
+        if (updatedCount.count === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.CONFLICT,
+            'STALE_DELIVERY_PRECONDITION',
+            'STALE_DELIVERY_PRECONDITION: delivery state changed concurrently'
+          );
+        }
+
+        // D5: Atomically enqueue durable outbox event on RELEASE_FOR_RETRY so worker executes the reserved submission ID
+        if (body.resolution === 'RELEASE_FOR_RETRY' && nextSubmissionId) {
+          const retryOutboxKey = buildDeliveryRetryOutboxKey({
+            merchantId,
+            deliveryId: delivery.id,
+            attempt: nextAttempts,
+          });
+          await tx.outboxEvent.upsert({
+            where: { idempotency_key: retryOutboxKey },
+            create: {
+              event_type: NOTIFICATION_EVENT,
+              payload: {
+                schema_version: 1,
+                kind: 'DELIVERY_RETRY',
+                merchant_id: merchantId,
+                notification_id: delivery.notification_id,
+                delivery_id: delivery.id,
+                expected_attempt: nextAttempts,
+                provider_submission_id: nextSubmissionId,
+                occurred_at: now.toISOString(),
+              },
+              correlation_id: correlationId,
+              idempotency_key: retryOutboxKey,
+              status: OutboxStatusEnum.PENDING,
+            },
+            update: {},
+          });
+        }
+
         const snapshot = {
           id: delivery.id,
           notification_id: delivery.notification_id,
-          state: delivery.state,
-          attempts: delivery.attempts,
-          provider_submission_id: delivery.provider_submission_id,
-          provider_message_id: delivery.provider_message_id,
+          state: nextState,
+          attempts: nextAttempts,
+          provider_submission_id: nextSubmissionId,
+          provider_message_id: nextProviderMsgId,
         };
+
         await tx.notificationRedeliverIdempotency.create({
           data: {
             merchant_id: merchantId,
@@ -686,140 +850,45 @@ export class NotificationsService {
             response_snapshot: snapshot,
           },
         });
-        return { data: snapshot, meta: { correlation_id: correlationId } };
-      }
 
-      // 4. Only UNKNOWN or DEAD_LETTER rows may be transitioned
-      if (
-        delivery.state !== NotificationDeliveryStateEnum.UNKNOWN &&
-        delivery.state !== NotificationDeliveryStateEnum.DEAD_LETTER
-      ) {
-        throw new CanonicalApiException(
-          HttpStatus.CONFLICT,
-          'STALE_DELIVERY_PRECONDITION',
-          'Bản ghi không ở trạng thái UNKNOWN hoặc DEAD_LETTER',
-          false,
-          undefined,
-          undefined,
-          undefined,
-          {
-            current_state: delivery.state,
-            current_attempts: delivery.attempts,
-            current_provider_submission_id: delivery.provider_submission_id,
-          }
-        );
-      }
-
-      // 5. Enforce optimistic preconditions (expected_attempt & expected_provider_submission_id)
-      if (
-        delivery.attempts !== body.expected_attempt ||
-        delivery.provider_submission_id !== body.expected_provider_submission_id
-      ) {
-        throw new CanonicalApiException(
-          HttpStatus.CONFLICT,
-          'STALE_DELIVERY_PRECONDITION',
-          'STALE_DELIVERY_PRECONDITION: delivery attempt or submission ID does not match current state',
-          false,
-          undefined,
-          undefined,
-          undefined,
-          {
-            current_state: delivery.state,
-            current_attempts: delivery.attempts,
-            current_provider_submission_id: delivery.provider_submission_id,
-          }
-        );
-      }
-
-      const now = new Date();
-      let nextState: NotificationDeliveryStateEnum;
-      let nextAttempts = delivery.attempts;
-      let nextSubmissionId = delivery.provider_submission_id;
-      let nextProviderMsgId = delivery.provider_message_id;
-
-      if (body.resolution === 'MARK_SENT') {
-        nextState = NotificationDeliveryStateEnum.SENT;
-        if (body.provider_message_id) {
-          nextProviderMsgId = body.provider_message_id;
-        }
-      } else {
-        nextState = NotificationDeliveryStateEnum.PENDING;
-        nextAttempts = delivery.attempts + 1;
-        nextSubmissionId = buildProviderSubmissionId(delivery.notification_id, nextAttempts);
-        nextProviderMsgId = null;
-      }
-
-      const updatedCount = await tx.notificationChannelDelivery.updateMany({
-        where: {
-          id: delivery.id,
-          state: delivery.state,
-          attempts: body.expected_attempt,
-          provider_submission_id: body.expected_provider_submission_id,
-        },
-        data: {
-          state: nextState,
-          attempts: nextAttempts,
-          provider_submission_id: nextSubmissionId,
-          provider_message_id: nextProviderMsgId,
-          sent_at: body.resolution === 'MARK_SENT' ? now : null,
-          last_error_code: null,
-          correlation_id: correlationId,
-        },
-      });
-
-      if (updatedCount.count === 0) {
-        throw new CanonicalApiException(
-          HttpStatus.CONFLICT,
-          'STALE_DELIVERY_PRECONDITION',
-          'STALE_DELIVERY_PRECONDITION: delivery state changed concurrently'
-        );
-      }
-
-      const snapshot = {
-        id: delivery.id,
-        notification_id: delivery.notification_id,
-        state: nextState,
-        attempts: nextAttempts,
-        provider_submission_id: nextSubmissionId,
-        provider_message_id: nextProviderMsgId,
-      };
-
-      await tx.notificationRedeliverIdempotency.create({
-        data: {
-          merchant_id: merchantId,
-          delivery_id: delivery.id,
-          idempotency_key: idemKey,
-          request_fingerprint: requestFingerprint,
-          response_snapshot: snapshot,
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          merchant_id: merchantId,
-          user_id: userId,
-          actor: userId,
-          action:
-            body.resolution === 'MARK_SENT'
-              ? 'NOTIFICATION_DELIVERY_MARKED_SENT'
-              : 'NOTIFICATION_DELIVERY_RELEASED_FOR_RETRY',
-          entity_type: 'NotificationChannelDelivery',
-          entity_id: delivery.id,
-          old_value: {
-            state: delivery.state,
-            attempts: delivery.attempts,
-            provider_submission_id: delivery.provider_submission_id,
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: userId,
+            actor: userId,
+            action:
+              body.resolution === 'MARK_SENT'
+                ? 'NOTIFICATION_DELIVERY_MARKED_SENT'
+                : 'NOTIFICATION_DELIVERY_RELEASED_FOR_RETRY',
+            entity_type: 'NotificationChannelDelivery',
+            entity_id: delivery.id,
+            old_value: {
+              state: delivery.state,
+              attempts: delivery.attempts,
+              provider_submission_id: delivery.provider_submission_id,
+            },
+            new_value: snapshot,
+            ip_address: clientIp,
+            reason: `Manual recovery resolution (${body.resolution}) correlation=${correlationId}`,
           },
-          new_value: snapshot,
-          ip_address: clientIp,
-          reason: `Manual recovery resolution (${body.resolution}) correlation=${correlationId}`,
-        },
-      });
+        });
 
-      return {
-        data: snapshot,
-        meta: { correlation_id: correlationId },
-      };
-    });
+        return {
+          data: snapshot,
+          meta: { correlation_id: correlationId },
+        };
+      });
+    } catch (err: any) {
+      // D5: Reconcile concurrent identical redelivery after losing CAS or unique idempotency race
+      if (
+        err?.code === 'P2002' ||
+        (err instanceof CanonicalApiException &&
+          (err.getResponse() as any)?.error?.code === 'STALE_DELIVERY_PRECONDITION')
+      ) {
+        const reconciled = await reconcileExistingIdempotency();
+        if (reconciled) return reconciled;
+      }
+      throw err;
+    }
   }
 }

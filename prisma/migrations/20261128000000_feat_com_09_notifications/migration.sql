@@ -113,6 +113,22 @@ CREATE UNIQUE INDEX "notification_redeliver_idempotency_merchant_id_delivery_id_
 CREATE INDEX "notification_redeliver_idempotency_merchant_id_created_at_idx"
   ON "notification_redeliver_idempotency"("merchant_id", "created_at");
 
+-- 4b. NotificationDigestContribution table (D6 durable digest replay deduplication)
+CREATE TABLE "notification_digest_contributions" (
+  "id" UUID NOT NULL,
+  "notification_id" UUID NOT NULL,
+  "contribution_key" VARCHAR(255) NOT NULL,
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "notification_digest_contributions_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX "notification_digest_contributions_notification_id_contribution_key_key"
+  ON "notification_digest_contributions"("notification_id", "contribution_key");
+
+ALTER TABLE "notification_digest_contributions"
+  ADD CONSTRAINT "notification_digest_contributions_notification_id_fkey"
+  FOREIGN KEY ("notification_id") REFERENCES "notifications"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
 -- 5. D3 Compatibility Backfill: force protected subscription keys to true in-place
 -- while preserving all other preference keys and channel booleans.
 UPDATE "users"

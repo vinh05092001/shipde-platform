@@ -3,9 +3,11 @@ import * as assert from 'node:assert/strict';
 import {
   ALL_NOTIFICATION_EVENT_TYPES,
   NOTIFICATION_MATRIX_RULES,
+  buildDeliveryRetryOutboxKey,
   buildNotificationOutboxKey,
   buildNotificationResolutionOutboxKey,
   buildProviderSubmissionId,
+  evaluateRecipientSchedule,
   maskNotificationEmail,
   validateNotificationEnvelope,
 } from '@shipde/contracts';
@@ -120,5 +122,43 @@ describe('FEAT-COM-09 Slice A — Notification Contracts & Rules Unit Suite', ()
     assert.equal(resolved.emailLookupSupported, false);
     assert.equal(resolved.emailMaxAttempts, 3);
     assert.equal(resolved.listMaxLimit, 100);
+  });
+
+  it('TEST-COM-09-11: evaluateRecipientSchedule observes recipient IANA timezone and configured tiers', () => {
+    // 2026-11-28T23:30:00Z is 2026-11-29 06:30 in Asia/Ho_Chi_Minh (UTC+7), before 08:00 digest hour
+    const instant = new Date('2026-11-28T23:30:00Z');
+    const vn = evaluateRecipientSchedule({
+      timezone: 'Asia/Ho_Chi_Minh',
+      now: instant,
+      digestHourLocal: 8,
+      escalationHours: [4, 12, 24],
+      claimReminderHours: [48, 24, 6],
+      eventAgeHours: 14,
+      hoursUntilDeadline: 20,
+    });
+    assert.equal(vn.localDate, '2026-11-29');
+    assert.equal(vn.localHour, 6);
+    assert.equal(vn.digestDue, false);
+    assert.equal(vn.escalationTier, 2);
+    assert.equal(vn.claimReminderTier, 2);
+
+    const utc = evaluateRecipientSchedule({
+      timezone: 'UTC',
+      now: instant,
+      digestHourLocal: 8,
+      escalationHours: [4, 12, 24],
+      claimReminderHours: [48, 24, 6],
+    });
+    assert.equal(utc.localDate, '2026-11-28');
+    assert.equal(utc.localHour, 23);
+    assert.equal(utc.digestDue, true);
+
+    assert.ok(
+      buildDeliveryRetryOutboxKey({
+        merchantId: MERCHANT_ID,
+        deliveryId: 'del-1',
+        attempt: 3,
+      }).includes('delivery-retry:del-1:3')
+    );
   });
 });
