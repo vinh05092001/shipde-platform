@@ -6,6 +6,9 @@ import { RedisService } from './redis/redis.service';
 import { StorageService } from './storage/storage.service';
 import { SmokeWorker } from './queue/smoke.worker';
 import { OutboxDispatcher } from './dispatcher/outbox.dispatcher';
+import { NotificationEmailTransport } from './notifications/notification-email.transport';
+import { NotificationProcessor } from './notifications/notification.processor';
+import { NotificationsWorker } from './notifications/notifications.worker';
 import { validateConfig, AppConfig } from '@shipde/config';
 import { APP_CONFIG } from './config.token';
 
@@ -21,8 +24,19 @@ import { APP_CONFIG } from './config.token';
     StorageService,
     HealthService,
     SmokeWorker,
+    NotificationEmailTransport,
+    NotificationProcessor,
+    NotificationsWorker,
     OutboxDispatcher,
   ],
-  exports: [PrismaService, RedisService, StorageService, SmokeWorker, OutboxDispatcher],
+  exports: [
+    PrismaService,
+    RedisService,
+    StorageService,
+    SmokeWorker,
+    NotificationProcessor,
+    NotificationsWorker,
+    OutboxDispatcher,
+  ],
 })
 export class WorkerAppModule {}

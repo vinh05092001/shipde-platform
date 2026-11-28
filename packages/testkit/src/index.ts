@@ -203,5 +203,8 @@ export * from './msw/index.js';
 import request from 'supertest';
 export { request };
 
+// --- Notification Center Fixtures (FEAT-COM-09 / D1, D5) ---
+export * from './notifications.js';
+
 // --- Optional, in-process PostgreSQL for DB-backed tests ---
 export * from './database.js';

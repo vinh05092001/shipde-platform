@@ -248,9 +248,16 @@ export class MeService {
 
     // 7. Notification preferences (BR-PRO-03, AC-PRO-01-07)
     if (dto.notification_preferences !== undefined) {
-      const mergedPrefs = this.mergeAndValidateNotificationPreferences(
+      const mergedPrefs = await this.mergeAndValidateNotificationPreferences(
         user.notification_preferences,
-        dto.notification_preferences
+        dto.notification_preferences,
+        {
+          merchantId: user.merchant_id,
+          userId: user.id,
+          actor: user.full_name || user.email || user.id,
+          clientIp,
+          correlationId,
+        }
       );
       updates.notification_preferences = mergedPrefs;
     }
@@ -434,9 +441,16 @@ export class MeService {
     }
 
     if (dto.notification_preferences !== undefined) {
-      const mergedPrefs = this.mergeAndValidateNotificationPreferences(
+      const mergedPrefs = await this.mergeAndValidateNotificationPreferences(
         user.notification_preferences,
-        dto.notification_preferences
+        dto.notification_preferences,
+        {
+          merchantId: user.merchant_id,
+          userId: user.id,
+          actor: user.full_name || user.email || user.id,
+          clientIp,
+          correlationId,
+        }
       );
       updates.notification_preferences = mergedPrefs;
     }
@@ -494,11 +508,18 @@ export class MeService {
   }
 
   /**
-   * Helper to merge and strictly validate notification preferences per BR-PRO-03 / NOTIFICATIONS-REPORTS.md
+   * Helper to merge and strictly validate notification preferences per BR-PRO-03 / FEAT-COM-09 D3
    */
-  private mergeAndValidateNotificationPreferences(
+  private async mergeAndValidateNotificationPreferences(
     current: any,
-    incoming: NotificationPreferencesDto
+    incoming: NotificationPreferencesDto,
+    auditCtx?: {
+      merchantId: string | null;
+      userId: string;
+      actor: string;
+      clientIp: string;
+      correlationId: string;
+    }
   ) {
     const base = current || DEFAULT_NOTIFICATION_PREFERENCES;
     const channels = {
@@ -516,17 +537,45 @@ export class MeService {
       ...(incoming.subscriptions || {}),
     };
 
-    // BR-PRO-03 & AC-PRO-01-07: Critical alert inviolability
+    // BR-PRO-03 & FEAT-COM-09 D3: Critical alert inviolability + immutable audit on rejection
     if (incoming.subscriptions) {
-      if (
-        incoming.subscriptions.security_alerts === false ||
-        incoming.subscriptions.create_unknown === false ||
-        incoming.subscriptions.claim_deadline_warning === false
-      ) {
+      const attemptedKeys: string[] = [];
+      if (incoming.subscriptions.security_alerts === false) attemptedKeys.push('security_alerts');
+      if (incoming.subscriptions.create_unknown === false) attemptedKeys.push('create_unknown');
+      if (incoming.subscriptions.claim_deadline_warning === false) {
+        attemptedKeys.push('claim_deadline_warning');
+      }
+      if (attemptedKeys.length > 0) {
+        if (auditCtx && this.prisma.auditLog?.create) {
+          await this.prisma.auditLog.create({
+            data: {
+              merchant_id: auditCtx.merchantId,
+              user_id: auditCtx.userId,
+              actor: auditCtx.actor,
+              action: 'PROTECTED_PREFERENCE_WRITE_REJECTED',
+              entity_type: 'User',
+              entity_id: auditCtx.userId,
+              new_value: {
+                attempted_keys: attemptedKeys,
+                outcome: 'REJECTED',
+                correlation_id: auditCtx.correlationId,
+              },
+              ip_address: auditCtx.clientIp,
+              reason: 'Rejected attempt to disable protected notification subscription (D3)',
+            },
+          });
+        }
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           'CANNOT_DISABLE_CRITICAL_NOTIFICATIONS',
-          'Không thể tắt cảnh báo bảo mật, sự cố tạo đơn và hạn chót khiếu nại (bắt buộc theo quy định an toàn vận hành)'
+          'Không thể tắt cảnh báo bảo mật, sự cố tạo đơn và hạn chót khiếu nại (bắt buộc theo quy định an toàn vận hành)',
+          false,
+          undefined,
+          attemptedKeys.map((key) => ({
+            field: `notification_preferences.subscriptions.${key}`,
+            code: 'PROTECTED_SUBSCRIPTION_CANNOT_DISABLE',
+            message: `${key} không thể tắt`,
+          }))
         );
       }
     }

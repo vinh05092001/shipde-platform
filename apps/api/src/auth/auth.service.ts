@@ -10,6 +10,12 @@ import {
 } from './totp.util';
 import { resolveMfaEncryptionKey, normalizeCorrelationId } from '@shipde/config';
 import {
+  NOTIFICATION_EVENT,
+  NotificationEventType,
+  buildNotificationOutboxKey,
+} from '@shipde/contracts';
+import { OutboxStatusEnum } from '@prisma/client';
+import {
   Injectable,
   Inject,
   BadRequestException,
@@ -1245,6 +1251,44 @@ export class AuthService {
           revoke_reason: 'Password reset',
         },
       });
+
+      // FEAT-COM-09 D1: live EVT-COM-09-01 (password_reset) committed atomically
+      if (tokenRecord.user.merchant_id && tx.outboxEvent?.upsert) {
+        const fingerprint = `${tokenRecord.user_id}:password_reset:${tokenRecord.id}`;
+        const outboxKey = buildNotificationOutboxKey({
+          merchantId: tokenRecord.user.merchant_id,
+          eventType: NotificationEventType.EVT_COM_09_01,
+          sourceFingerprint: fingerprint,
+        });
+        await tx.outboxEvent.upsert({
+          where: { idempotency_key: outboxKey },
+          create: {
+            event_type: NOTIFICATION_EVENT,
+            payload: {
+              schema_version: 1,
+              event: NotificationEventType.EVT_COM_09_01,
+              occurred_at: new Date().toISOString(),
+              merchant_id: tokenRecord.user.merchant_id,
+              is_resolution: false,
+              source: {
+                type: 'password_reset',
+                id: tokenRecord.id,
+                branch_id: null,
+                warehouse_id: null,
+                carrier_account_id: null,
+              },
+              payload: {
+                affected_user_id: tokenRecord.user_id,
+                change_kind: 'password_reset',
+              },
+            },
+            correlation_id: normalizeCorrelationId(correlationId),
+            idempotency_key: outboxKey,
+            status: OutboxStatusEnum.PENDING,
+          },
+          update: {},
+        });
+      }
     });
 
     await this.logAudit({
@@ -2624,6 +2668,44 @@ export class AuthService {
           code_hash: h,
         })),
       });
+
+      // FEAT-COM-09 D1: live EVT-COM-09-01 (mfa_changed) committed atomically
+      if (merchantId && tx.outboxEvent?.upsert) {
+        const fingerprint = `${userId}:mfa_changed:${factor.id}`;
+        const outboxKey = buildNotificationOutboxKey({
+          merchantId,
+          eventType: NotificationEventType.EVT_COM_09_01,
+          sourceFingerprint: fingerprint,
+        });
+        await tx.outboxEvent.upsert({
+          where: { idempotency_key: outboxKey },
+          create: {
+            event_type: NOTIFICATION_EVENT,
+            payload: {
+              schema_version: 1,
+              event: NotificationEventType.EVT_COM_09_01,
+              occurred_at: now.toISOString(),
+              merchant_id: merchantId,
+              is_resolution: false,
+              source: {
+                type: 'mfa_factor',
+                id: factor.id,
+                branch_id: null,
+                warehouse_id: null,
+                carrier_account_id: null,
+              },
+              payload: {
+                affected_user_id: userId,
+                change_kind: 'mfa_changed',
+              },
+            },
+            correlation_id: normalizeCorrelationId(correlationId),
+            idempotency_key: outboxKey,
+            status: OutboxStatusEnum.PENDING,
+          },
+          update: {},
+        });
+      }
     });
 
     await this.logAudit({

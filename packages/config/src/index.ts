@@ -58,6 +58,47 @@ export interface AppConfig {
   RBAC_SEED_MAX_ATTEMPTS?: number;
   /** Backoff multiplier for RBAC platform seed */
   RBAC_SEED_BACKOFF_FACTOR?: number;
+  /** FEAT-COM-09 D5/D6 validated notification delivery & retention configuration */
+  NOTIFICATION_EMAIL_PROVIDER_MODE?: 'unconfigured' | 'smtp';
+  NOTIFICATION_EMAIL_LOOKUP_SUPPORTED?: boolean;
+  NOTIFICATION_EMAIL_MAX_ATTEMPTS?: number;
+  NOTIFICATION_EMAIL_BACKOFF_MS?: number[];
+  NOTIFICATION_LIST_DEFAULT_LIMIT?: number;
+  NOTIFICATION_LIST_MAX_LIMIT?: number;
+  NOTIFICATION_RETENTION_DAYS?: number;
+  NOTIFICATION_DIGEST_HOUR_LOCAL?: number;
+  NOTIFICATION_ESCALATION_HOURS?: number[];
+  NOTIFICATION_CLAIM_REMINDER_HOURS?: number[];
+}
+
+export interface NotificationDeliveryConfig {
+  emailProviderMode: 'unconfigured' | 'smtp';
+  emailLookupSupported: boolean;
+  emailMaxAttempts: number;
+  emailBackoffMs: number[];
+  listDefaultLimit: number;
+  listMaxLimit: number;
+  retentionDays: number;
+  digestHourLocal: number;
+  escalationHours: number[];
+  claimReminderHours: number[];
+}
+
+export function resolveNotificationDeliveryConfig(
+  config?: Partial<AppConfig>
+): NotificationDeliveryConfig {
+  return {
+    emailProviderMode: config?.NOTIFICATION_EMAIL_PROVIDER_MODE ?? 'unconfigured',
+    emailLookupSupported: config?.NOTIFICATION_EMAIL_LOOKUP_SUPPORTED ?? false,
+    emailMaxAttempts: config?.NOTIFICATION_EMAIL_MAX_ATTEMPTS ?? 3,
+    emailBackoffMs: config?.NOTIFICATION_EMAIL_BACKOFF_MS ?? [1000, 5000, 30000],
+    listDefaultLimit: config?.NOTIFICATION_LIST_DEFAULT_LIMIT ?? 20,
+    listMaxLimit: config?.NOTIFICATION_LIST_MAX_LIMIT ?? 100,
+    retentionDays: config?.NOTIFICATION_RETENTION_DAYS ?? 90,
+    digestHourLocal: config?.NOTIFICATION_DIGEST_HOUR_LOCAL ?? 8,
+    escalationHours: config?.NOTIFICATION_ESCALATION_HOURS ?? [4, 12, 24],
+    claimReminderHours: config?.NOTIFICATION_CLAIM_REMINDER_HOURS ?? [48, 24, 6],
+  };
 }
 
 export class ConfigValidationError extends Error {
@@ -342,6 +383,72 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     }
   }
 
+  // --- FEAT-COM-09 D5/D6: Notification delivery, pagination & retention configuration ---
+  const notifEmailModeRaw = rawEnv.NOTIFICATION_EMAIL_PROVIDER_MODE || 'unconfigured';
+  if (notifEmailModeRaw !== 'unconfigured' && notifEmailModeRaw !== 'smtp') {
+    invalidFields.push('NOTIFICATION_EMAIL_PROVIDER_MODE (must be unconfigured or smtp)');
+  }
+  const NOTIFICATION_EMAIL_PROVIDER_MODE = (
+    notifEmailModeRaw === 'smtp' ? 'smtp' : 'unconfigured'
+  ) as 'unconfigured' | 'smtp';
+
+  const notifLookupRaw = rawEnv.NOTIFICATION_EMAIL_LOOKUP_SUPPORTED;
+  if (notifLookupRaw !== undefined && notifLookupRaw !== 'true' && notifLookupRaw !== 'false') {
+    invalidFields.push('NOTIFICATION_EMAIL_LOOKUP_SUPPORTED (must be true or false)');
+  }
+  const NOTIFICATION_EMAIL_LOOKUP_SUPPORTED = notifLookupRaw === 'true';
+
+  const parsePositiveIntField = (
+    envName: string,
+    defaultVal: number,
+    min: number,
+    max: number
+  ): number => {
+    const raw = rawEnv[envName];
+    if (raw === undefined || raw === '') return defaultVal;
+    if (!/^\d+$/.test(raw)) {
+      invalidFields.push(`${envName} (must be an integer between ${min} and ${max})`);
+      return defaultVal;
+    }
+    const n = Number(raw);
+    if (!Number.isSafeInteger(n) || n < min || n > max) {
+      invalidFields.push(`${envName} (must be an integer between ${min} and ${max})`);
+      return defaultVal;
+    }
+    return n;
+  };
+
+  const NOTIFICATION_EMAIL_MAX_ATTEMPTS = parsePositiveIntField(
+    'NOTIFICATION_EMAIL_MAX_ATTEMPTS',
+    3,
+    1,
+    10
+  );
+  const NOTIFICATION_LIST_DEFAULT_LIMIT = parsePositiveIntField(
+    'NOTIFICATION_LIST_DEFAULT_LIMIT',
+    20,
+    1,
+    100
+  );
+  const NOTIFICATION_LIST_MAX_LIMIT = parsePositiveIntField(
+    'NOTIFICATION_LIST_MAX_LIMIT',
+    100,
+    1,
+    200
+  );
+  const NOTIFICATION_RETENTION_DAYS = parsePositiveIntField(
+    'NOTIFICATION_RETENTION_DAYS',
+    90,
+    1,
+    3650
+  );
+  const NOTIFICATION_DIGEST_HOUR_LOCAL = parsePositiveIntField(
+    'NOTIFICATION_DIGEST_HOUR_LOCAL',
+    8,
+    0,
+    23
+  );
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -373,6 +480,16 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     RBAC_SEED_RETRY_INTERVAL_MS,
     RBAC_SEED_MAX_ATTEMPTS,
     RBAC_SEED_BACKOFF_FACTOR,
+    NOTIFICATION_EMAIL_PROVIDER_MODE,
+    NOTIFICATION_EMAIL_LOOKUP_SUPPORTED,
+    NOTIFICATION_EMAIL_MAX_ATTEMPTS,
+    NOTIFICATION_EMAIL_BACKOFF_MS: [1000, 5000, 30000],
+    NOTIFICATION_LIST_DEFAULT_LIMIT,
+    NOTIFICATION_LIST_MAX_LIMIT,
+    NOTIFICATION_RETENTION_DAYS,
+    NOTIFICATION_DIGEST_HOUR_LOCAL,
+    NOTIFICATION_ESCALATION_HOURS: [4, 12, 24],
+    NOTIFICATION_CLAIM_REMINDER_HOURS: [48, 24, 6],
   };
 }
 

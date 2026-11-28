@@ -989,5 +989,824 @@ export type SearchResultItem = components['schemas']['SearchResultItem'];
 export type SearchResponseData = components['schemas']['SearchResponseData'];
 export type SearchResponse = components['schemas']['SearchResponse'];
 
+// --- Notification Center Contracts (FEAT-COM-09) ---
+/**
+ * FEAT-COM-09 — Notification Center, 14 Event Contracts & Recovery DTOs (D1–D6)
+ */
+
+export const NOTIFICATION_EVENT = 'NOTIFICATION_EVENT' as const;
+export const NOTIFICATION_QUEUE_NAME = 'shipde-notification-queue' as const;
+
+export const NotificationEventType = {
+  EVT_COM_09_01: 'EVT-COM-09-01', // Invite/identity/security change (LIVE producer in S01)
+  EVT_COM_09_02: 'EVT-COM-09-02', // Carrier token invalid/expiring
+  EVT_COM_09_03: 'EVT-COM-09-03', // Serviceability all unavailable
+  EVT_COM_09_04: 'EVT-COM-09-04', // Carrier API outage/timeout
+  EVT_COM_09_05: 'EVT-COM-09-05', // Create outcome unknown
+  EVT_COM_09_06: 'EVT-COM-09-06', // Pickup overdue
+  EVT_COM_09_07: 'EVT-COM-09-07', // Delivery exception
+  EVT_COM_09_08: 'EVT-COM-09-08', // Return expected/overdue
+  EVT_COM_09_09: 'EVT-COM-09-09', // Import blocked
+  EVT_COM_09_10: 'EVT-COM-09-10', // Manual match required
+  EVT_COM_09_11: 'EVT-COM-09-11', // Audit finding created
+  EVT_COM_09_12: 'EVT-COM-09-12', // Bank short/over
+  EVT_COM_09_13: 'EVT-COM-09-13', // Claim deadline approaching
+  EVT_COM_09_14: 'EVT-COM-09-14', // Claim accepted but unpaid
+} as const;
+
+export type NotificationEventType =
+  (typeof NotificationEventType)[keyof typeof NotificationEventType];
+
+export const ALL_NOTIFICATION_EVENT_TYPES: readonly NotificationEventType[] =
+  Object.values(NotificationEventType);
+
+export const NotificationSeverity = {
+  CRITICAL: 'critical',
+  HIGH: 'high',
+  MEDIUM: 'medium',
+} as const;
+export type NotificationSeverity = (typeof NotificationSeverity)[keyof typeof NotificationSeverity];
+
+export const SEVERITY_RANK: Record<NotificationSeverity, number> = {
+  critical: 3,
+  high: 2,
+  medium: 1,
+};
+
+export const NotificationStatus = {
+  ACTIVE: 'ACTIVE',
+  RESOLVED: 'RESOLVED',
+} as const;
+export type NotificationStatus = (typeof NotificationStatus)[keyof typeof NotificationStatus];
+
+export const NotificationChannel = {
+  IN_APP: 'in_app',
+  EMAIL: 'email',
+} as const;
+export type NotificationChannel = (typeof NotificationChannel)[keyof typeof NotificationChannel];
+
+export const NotificationDeliveryState = {
+  PENDING: 'PENDING',
+  IN_FLIGHT: 'IN_FLIGHT',
+  SENT: 'SENT',
+  FAILED: 'FAILED',
+  UNKNOWN: 'UNKNOWN',
+  SKIPPED_NO_VERIFIED_EMAIL: 'SKIPPED_NO_VERIFIED_EMAIL',
+  NOT_CONFIGURED: 'NOT_CONFIGURED',
+  DEAD_LETTER: 'DEAD_LETTER',
+} as const;
+export type NotificationDeliveryState =
+  (typeof NotificationDeliveryState)[keyof typeof NotificationDeliveryState];
+
+export const PROTECTED_SUBSCRIPTION_KEYS = [
+  'security_alerts',
+  'create_unknown',
+  'claim_deadline_warning',
+] as const;
+export type ProtectedSubscriptionKey = (typeof PROTECTED_SUBSCRIPTION_KEYS)[number];
+
+export type NotificationPreferenceSubscriptionKey =
+  | 'security_alerts'
+  | 'create_unknown'
+  | 'claim_deadline_warning'
+  | 'delivery_fail'
+  | 'rate_discrepancy'
+  | 'cod_overdue'
+  | 'abnormal_return';
+
+export interface NotificationMatrixRule {
+  eventType: NotificationEventType;
+  label: string;
+  severity: NotificationSeverity;
+  defaultChannels: readonly NotificationChannel[];
+  digest: boolean;
+  protectedSubscriptionKey?: ProtectedSubscriptionKey;
+  subscriptionKey?: NotificationPreferenceSubscriptionKey;
+  eligibleBaseRoles: readonly ('OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT')[];
+  customRolePermission?: string;
+  includeAffectedUser?: boolean;
+  scopeDimensions: readonly ('branch_id' | 'warehouse_id' | 'carrier_account_id')[];
+  liveProducerInS01: boolean;
+}
+
+export const NOTIFICATION_MATRIX_RULES: Record<NotificationEventType, NotificationMatrixRule> = {
+  'EVT-COM-09-01': {
+    eventType: 'EVT-COM-09-01',
+    label: 'Thay đổi lời mời / định danh / bảo mật',
+    severity: 'high',
+    defaultChannels: ['in_app', 'email'],
+    digest: false,
+    protectedSubscriptionKey: 'security_alerts',
+    subscriptionKey: 'security_alerts',
+    eligibleBaseRoles: ['OWNER'],
+    includeAffectedUser: true,
+    scopeDimensions: [],
+    liveProducerInS01: true,
+  },
+  'EVT-COM-09-02': {
+    eventType: 'EVT-COM-09-02',
+    label: 'Token hãng vận chuyển không hợp lệ / sắp hết hạn',
+    severity: 'high',
+    defaultChannels: ['in_app', 'email'],
+    digest: false,
+    subscriptionKey: 'security_alerts',
+    eligibleBaseRoles: ['OWNER'],
+    customRolePermission: 'carrier.credentials.manage',
+    scopeDimensions: ['carrier_account_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-03': {
+    eventType: 'EVT-COM-09-03',
+    label: 'Không có dịch vụ vận chuyển khả dụng',
+    severity: 'medium',
+    defaultChannels: ['in_app'],
+    digest: false,
+    subscriptionKey: 'delivery_fail',
+    eligibleBaseRoles: ['OPS_CSKH'],
+    customRolePermission: 'order.manage',
+    scopeDimensions: ['branch_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-04': {
+    eventType: 'EVT-COM-09-04',
+    label: 'API hãng vận chuyển gián đoạn / quá thời gian chờ',
+    severity: 'medium',
+    defaultChannels: ['in_app'],
+    digest: false,
+    subscriptionKey: 'delivery_fail',
+    eligibleBaseRoles: ['OPS_CSKH'],
+    customRolePermission: 'carrier.health.view',
+    scopeDimensions: ['carrier_account_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-05': {
+    eventType: 'EVT-COM-09-05',
+    label: 'Không xác định kết quả tạo vận đơn',
+    severity: 'critical',
+    defaultChannels: ['in_app', 'email'],
+    digest: false,
+    protectedSubscriptionKey: 'create_unknown',
+    subscriptionKey: 'create_unknown',
+    eligibleBaseRoles: ['OPS_CSKH', 'OWNER'],
+    customRolePermission: 'shipment.manage',
+    scopeDimensions: ['branch_id', 'warehouse_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-06': {
+    eventType: 'EVT-COM-09-06',
+    label: 'Quá hạn lấy hàng',
+    severity: 'high',
+    defaultChannels: ['in_app'],
+    digest: false,
+    subscriptionKey: 'delivery_fail',
+    eligibleBaseRoles: ['OPS_CSKH', 'WAREHOUSE'],
+    customRolePermission: 'pickup.manage',
+    scopeDimensions: ['warehouse_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-07': {
+    eventType: 'EVT-COM-09-07',
+    label: 'Ngoại lệ giao hàng',
+    severity: 'high',
+    defaultChannels: ['in_app'],
+    digest: false,
+    subscriptionKey: 'delivery_fail',
+    eligibleBaseRoles: ['OPS_CSKH'],
+    customRolePermission: 'exception.manage',
+    scopeDimensions: ['branch_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-08': {
+    eventType: 'EVT-COM-09-08',
+    label: 'Hàng hoàn dự kiến / quá hạn',
+    severity: 'medium',
+    defaultChannels: ['in_app'],
+    digest: true,
+    subscriptionKey: 'abnormal_return',
+    eligibleBaseRoles: ['WAREHOUSE', 'OPS_CSKH'],
+    customRolePermission: 'return.manage',
+    scopeDimensions: ['warehouse_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-09': {
+    eventType: 'EVT-COM-09-09',
+    label: 'Bản nhập dữ liệu bị chặn',
+    severity: 'high',
+    defaultChannels: ['in_app'],
+    digest: false,
+    subscriptionKey: 'rate_discrepancy',
+    eligibleBaseRoles: ['ACCOUNTANT', 'OPS_CSKH'],
+    customRolePermission: 'import.review',
+    scopeDimensions: ['branch_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-10': {
+    eventType: 'EVT-COM-09-10',
+    label: 'Cần đối khớp thủ công giao dịch ngân hàng',
+    severity: 'medium',
+    defaultChannels: ['in_app'],
+    digest: true,
+    subscriptionKey: 'cod_overdue',
+    eligibleBaseRoles: ['ACCOUNTANT', 'OPS_CSKH'],
+    customRolePermission: 'bank.allocate',
+    scopeDimensions: ['carrier_account_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-11': {
+    eventType: 'EVT-COM-09-11',
+    label: 'Phát sinh phát hiện kiểm toán cước',
+    severity: 'medium',
+    defaultChannels: ['in_app'],
+    digest: false,
+    subscriptionKey: 'rate_discrepancy',
+    eligibleBaseRoles: ['ACCOUNTANT'],
+    customRolePermission: 'audit.review',
+    scopeDimensions: [],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-12': {
+    eventType: 'EVT-COM-09-12',
+    label: 'Chênh lệch tiền ngân hàng (thiếu / thừa)',
+    severity: 'high',
+    defaultChannels: ['in_app', 'email'],
+    digest: false,
+    subscriptionKey: 'cod_overdue',
+    eligibleBaseRoles: ['ACCOUNTANT', 'OWNER'],
+    customRolePermission: 'bank.allocate',
+    scopeDimensions: [],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-13': {
+    eventType: 'EVT-COM-09-13',
+    label: 'Sắp hết hạn khiếu nại',
+    severity: 'critical',
+    defaultChannels: ['in_app', 'email'],
+    digest: false,
+    protectedSubscriptionKey: 'claim_deadline_warning',
+    subscriptionKey: 'claim_deadline_warning',
+    eligibleBaseRoles: ['ACCOUNTANT', 'OWNER'],
+    customRolePermission: 'claim.manage',
+    scopeDimensions: ['carrier_account_id'],
+    liveProducerInS01: false,
+  },
+  'EVT-COM-09-14': {
+    eventType: 'EVT-COM-09-14',
+    label: 'Khiếu nại đã được hãng chấp nhận nhưng chưa nhận tiền',
+    severity: 'high',
+    defaultChannels: ['in_app'],
+    digest: false,
+    subscriptionKey: 'cod_overdue',
+    eligibleBaseRoles: ['ACCOUNTANT'],
+    customRolePermission: 'claim.manage',
+    scopeDimensions: ['carrier_account_id'],
+    liveProducerInS01: false,
+  },
+};
+
+export interface NotificationEventSource {
+  type: string;
+  id: string;
+  branch_id: string | null;
+  warehouse_id: string | null;
+  carrier_account_id: string | null;
+}
+
+export interface NotificationOutboxEnvelope<TPayload = Record<string, unknown>> {
+  schema_version: 1;
+  event: NotificationEventType;
+  occurred_at: string;
+  merchant_id: string;
+  is_resolution?: boolean;
+  target_group_key?: string;
+  resolution_id?: string;
+  source: NotificationEventSource;
+  payload: TPayload;
+  /** True only for test/integration fixture producers (D1). */
+  fixture_evidence?: boolean;
+}
+
+export type SecurityChangeKind =
+  | 'invite_sent'
+  | 'invite_accepted'
+  | 'password_reset'
+  | 'mfa_changed'
+  | 'session_revoked'
+  | 'role_changed';
+
+const SECURITY_CHANGE_KINDS = new Set<string>([
+  'invite_sent',
+  'invite_accepted',
+  'password_reset',
+  'mfa_changed',
+  'session_revoked',
+  'role_changed',
+]);
+
+const EVIDENCE_LEVELS = new Set<string>([
+  'suspected',
+  'verified',
+  'carrier_accepted',
+  'bank_received',
+]);
+
+const DATE_WINDOW_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.trim().length > 0;
+}
+
+function isNullableString(v: unknown): v is string | null {
+  return v === null || isNonEmptyString(v);
+}
+
+function isPositiveInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 1;
+}
+
+function isNonNegativeInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
+function isSignedNonZeroInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v !== 0;
+}
+
+function hasExactKeys(obj: Record<string, unknown>, allowedKeys: readonly string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) return false;
+  }
+  return true;
+}
+
+export interface NotificationValidationResult {
+  valid: boolean;
+  error?: string;
+  sourceFingerprint?: string;
+  groupKey?: string;
+  digestWindow?: string | null;
+  queueRevision?: number | null;
+}
+
+/**
+ * Strictly validates a NOTIFICATION_EVENT envelope & event-specific payload per D6.
+ * Rejects missing required fields, unknown fields, or wrong types (to dead-letter).
+ */
+export function validateNotificationEnvelope(raw: unknown): NotificationValidationResult {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { valid: false, error: 'Envelope must be a JSON object' };
+  }
+  const env = raw as Record<string, unknown>;
+  if (env.schema_version !== 1) {
+    return { valid: false, error: 'schema_version must be 1' };
+  }
+  if (!isNonEmptyString(env.event) || !(env.event in NOTIFICATION_MATRIX_RULES)) {
+    return { valid: false, error: `Unknown event type: ${String(env.event)}` };
+  }
+  const eventType = env.event as NotificationEventType;
+  if (!isNonEmptyString(env.occurred_at) || Number.isNaN(Date.parse(env.occurred_at))) {
+    return { valid: false, error: 'occurred_at must be a valid ISO-8601 timestamp' };
+  }
+  if (!isNonEmptyString(env.merchant_id)) {
+    return { valid: false, error: 'merchant_id is required' };
+  }
+  const isResolution = env.is_resolution === true;
+  if (env.is_resolution !== undefined && typeof env.is_resolution !== 'boolean') {
+    return { valid: false, error: 'is_resolution must be boolean when provided' };
+  }
+  if (!env.source || typeof env.source !== 'object' || Array.isArray(env.source)) {
+    return { valid: false, error: 'source object is required' };
+  }
+  const src = env.source as Record<string, unknown>;
+  if (
+    !hasExactKeys(src, ['type', 'id', 'branch_id', 'warehouse_id', 'carrier_account_id']) ||
+    !isNonEmptyString(src.type) ||
+    !isNonEmptyString(src.id) ||
+    !isNullableString(src.branch_id ?? null) ||
+    !isNullableString(src.warehouse_id ?? null) ||
+    !isNullableString(src.carrier_account_id ?? null)
+  ) {
+    return { valid: false, error: 'Invalid source object fields' };
+  }
+
+  if (isResolution) {
+    if (!isNonEmptyString(env.target_group_key) || !isNonEmptyString(env.resolution_id)) {
+      return {
+        valid: false,
+        error: 'Resolution envelope requires target_group_key and resolution_id',
+      };
+    }
+    return {
+      valid: true,
+      sourceFingerprint: env.target_group_key,
+      groupKey: env.target_group_key,
+    };
+  }
+
+  if (!env.payload || typeof env.payload !== 'object' || Array.isArray(env.payload)) {
+    return { valid: false, error: 'payload must be an object' };
+  }
+  const p = env.payload as Record<string, unknown>;
+
+  let sourceFingerprint = '';
+  let digestWindow: string | null = null;
+  let queueRevision: number | null = null;
+
+  switch (eventType) {
+    case 'EVT-COM-09-01':
+      if (
+        !hasExactKeys(p, ['affected_user_id', 'change_kind']) ||
+        !isNonEmptyString(p.affected_user_id) ||
+        !isNonEmptyString(p.change_kind) ||
+        !SECURITY_CHANGE_KINDS.has(p.change_kind)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-01 payload' };
+      }
+      sourceFingerprint = `${p.affected_user_id}:${p.change_kind}:${src.id}`;
+      break;
+
+    case 'EVT-COM-09-02':
+      if (
+        !hasExactKeys(p, ['carrier_account_id', 'incident_id', 'condition', 'expires_at']) ||
+        !isNonEmptyString(p.carrier_account_id) ||
+        !isNonEmptyString(p.incident_id) ||
+        (p.condition !== 'invalid' && p.condition !== 'expiring') ||
+        !isNullableString(p.expires_at)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-02 payload' };
+      }
+      sourceFingerprint = `${p.carrier_account_id}:${p.condition}:${p.incident_id}`;
+      break;
+
+    case 'EVT-COM-09-03':
+      if (
+        !hasExactKeys(p, ['order_id', 'input_revision', 'branch_id']) ||
+        !isNonEmptyString(p.order_id) ||
+        !isPositiveInt(p.input_revision) ||
+        !isNonEmptyString(p.branch_id)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-03 payload' };
+      }
+      sourceFingerprint = `${p.order_id}:${p.input_revision}`;
+      break;
+
+    case 'EVT-COM-09-04':
+      if (
+        !hasExactKeys(p, ['carrier_account_id', 'incident_id', 'failure_kind']) ||
+        !isNonEmptyString(p.carrier_account_id) ||
+        !isNonEmptyString(p.incident_id) ||
+        (p.failure_kind !== 'outage' && p.failure_kind !== 'timeout')
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-04 payload' };
+      }
+      sourceFingerprint = `${p.incident_id}`;
+      break;
+
+    case 'EVT-COM-09-05':
+      if (
+        !hasExactKeys(p, ['shipment_id', 'create_attempt_id', 'branch_id', 'warehouse_id']) ||
+        !isNonEmptyString(p.shipment_id) ||
+        !isNonEmptyString(p.create_attempt_id) ||
+        !isNonEmptyString(p.branch_id) ||
+        !isNonEmptyString(p.warehouse_id)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-05 payload' };
+      }
+      sourceFingerprint = `${p.shipment_id}:${p.create_attempt_id}`;
+      break;
+
+    case 'EVT-COM-09-06':
+      if (
+        !hasExactKeys(p, ['shipment_id', 'warehouse_id', 'overdue_tier']) ||
+        !isNonEmptyString(p.shipment_id) ||
+        !isNonEmptyString(p.warehouse_id) ||
+        !isPositiveInt(p.overdue_tier)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-06 payload' };
+      }
+      sourceFingerprint = `${p.shipment_id}:${p.overdue_tier}`;
+      break;
+
+    case 'EVT-COM-09-07':
+      if (
+        !hasExactKeys(p, ['shipment_id', 'exception_id', 'branch_id']) ||
+        !isNonEmptyString(p.shipment_id) ||
+        !isNonEmptyString(p.exception_id) ||
+        !isNonEmptyString(p.branch_id)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-07 payload' };
+      }
+      sourceFingerprint = `${p.shipment_id}:${p.exception_id}`;
+      break;
+
+    case 'EVT-COM-09-08':
+      if (
+        !hasExactKeys(p, [
+          'return_id',
+          'warehouse_id',
+          'condition',
+          'overdue_tier',
+          'digest_window',
+        ]) ||
+        !isNonEmptyString(p.return_id) ||
+        !isNonEmptyString(p.warehouse_id) ||
+        (p.condition !== 'expected' && p.condition !== 'overdue') ||
+        !(p.overdue_tier === null || isPositiveInt(p.overdue_tier)) ||
+        !(
+          p.digest_window === null ||
+          (isNonEmptyString(p.digest_window) && DATE_WINDOW_PATTERN.test(p.digest_window))
+        )
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-08 payload' };
+      }
+      sourceFingerprint = `${p.return_id}:${p.condition}:${p.overdue_tier ?? 'none'}`;
+      digestWindow = p.digest_window as string | null;
+      break;
+
+    case 'EVT-COM-09-09':
+      if (
+        !hasExactKeys(p, ['import_id', 'import_revision', 'branch_id']) ||
+        !isNonEmptyString(p.import_id) ||
+        !isPositiveInt(p.import_revision) ||
+        !isNullableString(p.branch_id)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-09 payload' };
+      }
+      sourceFingerprint = `${p.import_id}:${p.import_revision}`;
+      break;
+
+    case 'EVT-COM-09-10':
+      if (
+        !hasExactKeys(p, [
+          'queue_count',
+          'carrier_account_id',
+          'digest_window',
+          'queue_revision',
+        ]) ||
+        !isNonNegativeInt(p.queue_count) ||
+        !isNullableString(p.carrier_account_id) ||
+        !isNonEmptyString(p.digest_window) ||
+        !DATE_WINDOW_PATTERN.test(p.digest_window) ||
+        !isPositiveInt(p.queue_revision)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-10 payload' };
+      }
+      sourceFingerprint = `${p.carrier_account_id || 'all'}`;
+      digestWindow = p.digest_window;
+      queueRevision = p.queue_revision;
+      break;
+
+    case 'EVT-COM-09-11':
+      if (
+        !hasExactKeys(p, ['audit_run_id', 'finding_count']) ||
+        !isNonEmptyString(p.audit_run_id) ||
+        !isPositiveInt(p.finding_count)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-11 payload' };
+      }
+      sourceFingerprint = `${p.audit_run_id}`;
+      break;
+
+    case 'EVT-COM-09-12':
+      if (
+        !hasExactKeys(p, ['batch_id', 'difference_vnd', 'evidence_level']) ||
+        !isNonEmptyString(p.batch_id) ||
+        !isSignedNonZeroInt(p.difference_vnd) ||
+        !isNonEmptyString(p.evidence_level) ||
+        !EVIDENCE_LEVELS.has(p.evidence_level)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-12 payload' };
+      }
+      sourceFingerprint = `${p.batch_id}:${p.evidence_level}`;
+      break;
+
+    case 'EVT-COM-09-13':
+      if (
+        !hasExactKeys(p, ['claim_id', 'carrier_account_id', 'reminder_tier', 'deadline_at']) ||
+        !isNonEmptyString(p.claim_id) ||
+        !isNonEmptyString(p.carrier_account_id) ||
+        !isPositiveInt(p.reminder_tier) ||
+        !isNonEmptyString(p.deadline_at) ||
+        Number.isNaN(Date.parse(p.deadline_at))
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-13 payload' };
+      }
+      sourceFingerprint = `${p.claim_id}:${p.reminder_tier}`;
+      break;
+
+    case 'EVT-COM-09-14':
+      if (
+        !hasExactKeys(p, ['claim_id', 'carrier_account_id', 'accepted_amount_vnd', 'aging_tier']) ||
+        !isNonEmptyString(p.claim_id) ||
+        !isNonEmptyString(p.carrier_account_id) ||
+        !isNonNegativeInt(p.accepted_amount_vnd) ||
+        !isPositiveInt(p.aging_tier)
+      ) {
+        return { valid: false, error: 'Invalid EVT-COM-09-14 payload' };
+      }
+      sourceFingerprint = `${p.claim_id}:${p.aging_tier}`;
+      break;
+  }
+
+  const groupKey = digestWindow ? `${sourceFingerprint}:${digestWindow}` : sourceFingerprint;
+  return {
+    valid: true,
+    sourceFingerprint,
+    groupKey,
+    digestWindow,
+    queueRevision,
+  };
+}
+
+/**
+ * D6 transport outbox key for active notification events (separate from group_key).
+ */
+export function buildNotificationOutboxKey(params: {
+  merchantId: string;
+  eventType: NotificationEventType;
+  sourceFingerprint: string;
+  digestWindow?: string | null;
+  queueRevision?: number | null;
+}): string {
+  const base = `com09:outbox:${params.merchantId}:${params.eventType}:notify:${params.sourceFingerprint}`;
+  if (params.digestWindow) {
+    return `${base}:${params.digestWindow}:${params.queueRevision ?? 1}`;
+  }
+  return base;
+}
+
+/**
+ * D6 transport outbox key for resolution events (never collides with active outbox keys).
+ */
+export function buildNotificationResolutionOutboxKey(params: {
+  merchantId: string;
+  eventType: NotificationEventType;
+  targetGroupKey: string;
+  resolutionId: string;
+}): string {
+  return `com09:outbox:${params.merchantId}:${params.eventType}:resolve:${params.targetGroupKey}:${params.resolutionId}`;
+}
+
+export function buildProviderSubmissionId(notificationId: string, attempt: number): string {
+  return `com09-email:${notificationId}:${attempt}`;
+}
+
+export function maskNotificationEmail(email?: string | null): string | null {
+  if (!email) return null;
+  const trimmed = email.trim();
+  const atIdx = trimmed.indexOf('@');
+  if (atIdx <= 0) return '***';
+  const local = trimmed.slice(0, atIdx);
+  const domain = trimmed.slice(atIdx + 1);
+  const visible = local.length <= 2 ? local[0] : local.slice(0, 2);
+  return `${visible}***@${domain}`;
+}
+
+export interface NotificationItemDto {
+  id: string;
+  event_type: NotificationEventType;
+  event_label: string;
+  severity: NotificationSeverity;
+  title: string;
+  body: string;
+  source_type: string;
+  source_id: string;
+  group_key: string;
+  digest_count: number;
+  link_path: string;
+  status: NotificationStatus;
+  read_at: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export interface NotificationDeliveryRecoveryItemDto {
+  id: string;
+  notification_id: string;
+  event_type: string;
+  severity: NotificationSeverity;
+  title: string;
+  recipient_email_masked: string | null;
+  channel: NotificationChannel;
+  state: NotificationDeliveryState;
+  attempts: number;
+  provider_submission_id: string | null;
+  provider_message_id: string | null;
+  last_error_code: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RedeliverNotificationDeliveryRequest {
+  expected_attempt: number;
+  expected_provider_submission_id: string;
+  idempotency_key: string;
+  resolution: 'MARK_SENT' | 'RELEASE_FOR_RETRY';
+  provider_message_id: string | null;
+}
+
+/**
+ * FEAT-COM-09 D5: Durable outbox envelope emitted atomically on operator RELEASE_FOR_RETRY.
+ */
+export interface NotificationDeliveryRetryEnvelope {
+  schema_version: 1;
+  kind: 'DELIVERY_RETRY';
+  merchant_id: string;
+  notification_id: string;
+  delivery_id: string;
+  expected_attempt: number;
+  provider_submission_id: string;
+  occurred_at: string;
+}
+
+export function isDeliveryRetryEnvelope(raw: unknown): raw is NotificationDeliveryRetryEnvelope {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const obj = raw as Record<string, unknown>;
+  return (
+    obj.schema_version === 1 &&
+    obj.kind === 'DELIVERY_RETRY' &&
+    typeof obj.merchant_id === 'string' &&
+    obj.merchant_id.length > 0 &&
+    typeof obj.notification_id === 'string' &&
+    obj.notification_id.length > 0 &&
+    typeof obj.delivery_id === 'string' &&
+    obj.delivery_id.length > 0 &&
+    typeof obj.expected_attempt === 'number' &&
+    Number.isSafeInteger(obj.expected_attempt) &&
+    obj.expected_attempt >= 1 &&
+    typeof obj.provider_submission_id === 'string' &&
+    obj.provider_submission_id.length > 0
+  );
+}
+
+export function buildDeliveryRetryOutboxKey(params: {
+  merchantId: string;
+  deliveryId: string;
+  attempt: number;
+}): string {
+  return `com09:outbox:${params.merchantId}:delivery-retry:${params.deliveryId}:${params.attempt}`;
+}
+
+/**
+ * FEAT-COM-09 D5 / AC-11: Evaluates digest window, escalation tier and claim reminder tier
+ * in the recipient's IANA timezone using governed configuration.
+ */
+export function evaluateRecipientSchedule(params: {
+  timezone: string;
+  now: Date;
+  digestHourLocal: number;
+  escalationHours: readonly number[];
+  claimReminderHours: readonly number[];
+  eventAgeHours?: number;
+  hoursUntilDeadline?: number;
+}): {
+  localDate: string;
+  localHour: number;
+  digestDue: boolean;
+  escalationTier: number | null;
+  claimReminderTier: number | null;
+} {
+  let tz = params.timezone || 'Asia/Ho_Chi_Minh';
+  try {
+    Intl.DateTimeFormat('en-CA', { timeZone: tz });
+  } catch {
+    tz = 'Asia/Ho_Chi_Minh';
+  }
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(params.now);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+  const localDate = `${get('year')}-${get('month')}-${get('day')}`;
+  const localHour = Number(get('hour'));
+  const digestDue = localHour >= params.digestHourLocal;
+
+  let escalationTier: number | null = null;
+  if (typeof params.eventAgeHours === 'number' && params.eventAgeHours >= 0) {
+    const sorted = [...params.escalationHours].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length; i += 1) {
+      if (params.eventAgeHours >= sorted[i]) {
+        escalationTier = i + 1;
+      }
+    }
+  }
+
+  let claimReminderTier: number | null = null;
+  if (typeof params.hoursUntilDeadline === 'number') {
+    const sortedDesc = [...params.claimReminderHours].sort((a, b) => b - a);
+    for (let i = 0; i < sortedDesc.length; i += 1) {
+      if (params.hoursUntilDeadline <= sortedDesc[i]) {
+        claimReminderTier = i + 1;
+      }
+    }
+  }
+
+  return { localDate, localHour, digestDue, escalationTier, claimReminderTier };
+}
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

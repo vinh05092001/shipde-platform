@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, OutboxEvent, OutboxStatusEnum } from '@prisma/client';
-import { QUEUE_SMOKE_EVENT_TYPE } from '@shipde/contracts';
+import { QUEUE_SMOKE_EVENT_TYPE, NOTIFICATION_EVENT } from '@shipde/contracts';
 import { normalizeCorrelationId } from '@shipde/config';
+
+const ALLOWED_OUTBOX_EVENT_TYPES = new Set<string>([QUEUE_SMOKE_EVENT_TYPE, NOTIFICATION_EVENT]);
 
 @Injectable()
 export class OutboxService {
@@ -23,9 +25,9 @@ export class OutboxService {
       idempotencyKey?: string;
     }
   ): Promise<OutboxEvent> {
-    if (data.eventType !== QUEUE_SMOKE_EVENT_TYPE) {
+    if (!ALLOWED_OUTBOX_EVENT_TYPES.has(data.eventType)) {
       throw new Error(
-        `Unsupported outbox event type: '${data.eventType}'. Foundation dispatcher only processes '${QUEUE_SMOKE_EVENT_TYPE}'.`
+        `Unsupported outbox event type: '${data.eventType}'. Dispatcher only processes allowed event types.`
       );
     }
 
@@ -53,9 +55,9 @@ export class OutboxService {
     correlationId: string;
     idempotencyKey?: string;
   }): Promise<OutboxEvent> {
-    if (data.eventType !== QUEUE_SMOKE_EVENT_TYPE) {
+    if (!ALLOWED_OUTBOX_EVENT_TYPES.has(data.eventType)) {
       throw new Error(
-        `Unsupported outbox event type: '${data.eventType}'. Foundation dispatcher only processes '${QUEUE_SMOKE_EVENT_TYPE}'.`
+        `Unsupported outbox event type: '${data.eventType}'. Dispatcher only processes allowed event types.`
       );
     }
 

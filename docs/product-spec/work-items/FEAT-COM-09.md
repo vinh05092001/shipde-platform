@@ -6,14 +6,16 @@
 |---|---|
 | Work Item ID | `FEAT-COM-09` |
 | Feature ID | `FEAT-COM-09` |
-| Status | `READY_FOR_AUTHOR` — gaps G1–G6 are recorded as decisions D1–D6 (Operator approval 2026-10-31; versioned in `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`) |
+| Status | `READY_FOR_AUTHOR` |
 | Delivery order | 28, S01, Shared platform |
 | Dependencies | Registered: `TASK-FOUND-04` plus BACKLOG-DEPENDENCIES.md. Available integration prerequisites: `FEAT-AUTH-01`, `FEAT-AUTH-06`, `FEAT-RBAC-01`, `FEAT-RBAC-02`, `FEAT-PRO-01`. Domain producer dependency scope is resolved by D1 (bounded S01 first delivery; the remaining producer categories ship as versioned fixture-only event contracts). |
 | Assigned author | `GEMINI` |
+| Difficulty | `L3` |
+| Reuse Decision | `IN_REPO` |
 | Risk | HIGH — tenant/recipient isolation, security notices, financial information in email, durable asynchronous delivery |
-| Allowed paths | `apps/api/src/notifications/**`; `apps/api/src/app.module.ts`; `apps/api/src/users/me.controller.ts`; `apps/api/src/users/me.dto.ts`; `apps/api/src/users/me.service.ts`; `apps/api/src/outbox/outbox.service.ts`; `apps/api/src/invitations/invitations.service.ts`; `apps/api/src/invitations/invitations.supertest.spec.ts`; `apps/api/src/invitations/invitations.unit.spec.ts`; `apps/api/src/auth/auth.service.ts`; `apps/api/src/auth/auth.login.supertest.spec.ts`; `apps/api/src/auth/auth.supertest.spec.ts`; `apps/worker/src/notifications/**`; `apps/worker/src/app.module.ts`; `apps/worker/src/dispatcher/outbox.dispatcher.ts`; `apps/web/src/app/settings/notifications/page.tsx`; `apps/web/src/app/admin/jobs/notification-deliveries/page.tsx`; `apps/web/src/components/notifications/**`; `apps/web/src/components/ProfileSettingsTab.tsx`; `apps/web/src/components/NotificationMatrixTab.tsx`; `apps/web/src/components/SettingsWorkspace.tsx`; `apps/web/src/components/ShopSettingsModal.tsx`; `apps/web/src/tests/**`; `apps/web/e2e/**`; `prisma/schema.prisma`; `prisma/migrations/**`; `docs/product-spec/contracts/openapi.yaml`; `packages/contracts/src/**`; `packages/config/src/**`; `packages/testkit/src/**`; `apps/api/package.json`; `apps/web/package.json`; `apps/worker/package.json`; `packages/contracts/package.json`; `packages/config/package.json`; `packages/testkit/package.json`; `docs/product-spec/work-items/FEAT-COM-09.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/00-control/TRACEABILITY.md` |
+| Allowed paths | `apps/api/src/notifications/**`; `apps/api/src/app.module.ts`; `apps/api/src/users/me.controller.ts`; `apps/api/src/users/me.dto.ts`; `apps/api/src/users/me.service.ts`; `apps/api/src/outbox/outbox.service.ts`; `apps/api/src/invitations/invitations.service.ts`; `apps/api/src/invitations/invitations.supertest.spec.ts`; `apps/api/src/invitations/invitations.unit.spec.ts`; `apps/api/src/auth/auth.service.ts`; `apps/api/src/auth/auth.login.supertest.spec.ts`; `apps/api/src/auth/auth.supertest.spec.ts`; `apps/worker/src/notifications/**`; `apps/worker/src/app.module.ts`; `apps/worker/src/dispatcher/outbox.dispatcher.ts`; `apps/worker/src/worker.supertest.spec.ts`; `apps/web/src/app/settings/notifications/page.tsx`; `apps/web/src/app/admin/jobs/notification-deliveries/page.tsx`; `apps/web/src/components/notifications/**`; `apps/web/src/components/ProfileSettingsTab.tsx`; `apps/web/src/components/NotificationMatrixTab.tsx`; `apps/web/src/components/SettingsWorkspace.tsx`; `apps/web/src/components/ShopSettingsModal.tsx`; `apps/web/src/tests/**`; `apps/web/e2e/**`; `prisma/schema.prisma`; `prisma/migrations/**`; `docs/product-spec/contracts/openapi.yaml`; `packages/contracts/src/**`; `packages/config/src/**`; `packages/testkit/src/**`; `apps/api/package.json`; `apps/web/package.json`; `apps/worker/package.json`; `packages/contracts/package.json`; `packages/config/package.json`; `packages/testkit/package.json`; `docs/product-spec/work-items/FEAT-COM-09.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/00-control/TRACEABILITY.md` |
 | Reviewer | Codex — fresh independent task |
-| Branch | `feat/feat-com-09` — create from the current integration base after the writer is selected |
+| Branch | `feat/feat-com-09` |
 | Pull Request | Open one implementation PR after the branch is created. |
 | Inspected baseline | Local HEAD and local `origin/main`: `b52f3af7c579be6e5fbbfcd339a4e54d8d0c4d48`; inspected 2026-10-30. No remote refresh or CI verification claimed. |
 
@@ -317,6 +319,33 @@ All rows are **NOT RUN — to be executed during implementation** (Slice A then 
 | AC-COM-09-16 / TEST-COM-09-16 | Apply configured eligible retention/deletion and attempt cross-tenant cleanup | D6 retention records removed/anonymized without breaking required audit/history or tenant isolation | Database lifecycle tests and operational recovery evidence; D6 |
 
 Fixtures must use synthetic identifiers, separate tenants and recipients, allowed/denied/currently revoked roles/scopes, duplicate/distinct events, all channel preference combinations, unavailable email, deterministic clocks, and controlled transport failures. No real shop contact details, tokens, contracts or bank data may be committed.
+
+## WHERE (key files and lines)
+
+These anchors are on pilot base `66d54a1b`. Reuse the existing API, transaction/outbox, and worker patterns before adding new modules.
+
+- `prisma/schema.prisma:916` — outbox persistence and transaction boundary.
+- `apps/api/src/invitations/invitations.service.ts:137` — bounded invitation producer.
+- `apps/api/src/auth/auth.service.ts:149` — only the approved D1 identity/security-change producer; preserve current auth behavior.
+- `apps/api/src/users/me.service.ts:103` — preference-update boundary for D3.
+- `apps/api/src/outbox/outbox.service.ts:8` — existing outbox write path.
+- `apps/worker/src/dispatcher/outbox.dispatcher.ts:20` — existing outbox dispatch path; preserve smoke behavior.
+
+## Verify & RED
+
+Pilot entry is **Slice A only**. Before editing production code, write the focused `TEST-COM-09-02` Supertest case under the existing notifications allowlist and run it on `66d54a1b` with only the test present:
+
+```sh
+pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/notifications/notifications.supertest.spec.ts
+```
+
+RED must reach the real authenticated `GET /api/v1/notifications` request and fail the expected `200` assertion because the route is absent (`404`). A missing fixture, failed login, or failed setup is not RED. Record the real exit and assertion output, then run the same command after the fix and assert recipient/merchant isolation per the matrix. RED has not been run at planning time.
+
+For the Slice A review, report its listed API/worker/DB acceptance rows and the one-migration check. Keep all web paths and Slice B out of this checkpoint. Retain the existing one-branch, one-implementation-PR contract and all 16 acceptance rows for final feature merge.
+
+## PR receipt metrics
+
+Record actual READY-to-merge time, repair rounds, gate time, and cleanup disposition in the implementation PR. Include tokens only if backed by a run receipt. Capture Slice A elapsed time separately so the pilot can be evaluated before Slice B.
 
 ## Verification commands
 

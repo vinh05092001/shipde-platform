@@ -167,6 +167,7 @@ model Merchant {
   onboarding_state  OnboardingState?
   branches          Branch[]
   warehouses        Warehouse[]
+  notifications     Notification[]
 
   @@index([tax_code])
   @@map("merchants")
@@ -246,6 +247,7 @@ model User {
   mfa_factors           MfaFactor[]
   mfa_challenges        MfaChallenge[]
   invitations_sent      Invitation[]          @relation("InvitationsSent")
+  notifications         Notification[]        @relation("NotificationRecipient")
 
   @@index([merchant_id, role])
   @@index([merchant_id, custom_role_id])
@@ -921,7 +923,7 @@ model OutboxEvent {
   status          OutboxStatusEnum  @default(PENDING)
   attempts        Int               @default(0)
   last_error      String?           @db.Text
-  idempotency_key String?           @unique @db.VarChar(128)
+  idempotency_key String?           @unique @db.VarChar(512)
   created_at      DateTime          @default(now()) @db.Timestamptz
   scheduled_at    DateTime          @default(now()) @db.Timestamptz
   published_at    DateTime?         @db.Timestamptz
@@ -929,6 +931,120 @@ model OutboxEvent {
   @@index([status, scheduled_at])
   @@index([correlation_id])
   @@map("outbox_events")
+}
+
+// ============================================================================
+// 8b. Notifications Center & Durable Channel Delivery (FEAT-COM-09 / D5, D6)
+// ============================================================================
+
+enum NotificationSeverityEnum {
+  CRITICAL
+  HIGH
+  MEDIUM
+}
+
+enum NotificationStatusEnum {
+  ACTIVE
+  RESOLVED
+}
+
+enum NotificationChannelEnum {
+  IN_APP
+  EMAIL
+}
+
+enum NotificationDeliveryStateEnum {
+  PENDING
+  IN_FLIGHT
+  SENT
+  FAILED
+  UNKNOWN
+  SKIPPED_NO_VERIFIED_EMAIL
+  NOT_CONFIGURED
+  DEAD_LETTER
+}
+
+model Notification {
+  id                        String                   @id @default(uuid()) @db.Uuid
+  merchant_id               String                   @db.Uuid
+  recipient_user_id         String                   @db.Uuid
+  event_type                String                   @db.VarChar(64)
+  severity                  NotificationSeverityEnum
+  severity_rank             Int                      @default(1)
+  title                     String                   @db.VarChar(255)
+  body                      String                   @db.Text
+  source_type               String                   @db.VarChar(64)
+  source_id                 String                   @db.VarChar(128)
+  source_branch_id          String?                  @db.Uuid
+  source_warehouse_id       String?                  @db.Uuid
+  source_carrier_account_id String?                  @db.Uuid
+  group_key                 String                   @db.VarChar(255)
+  digest_count              Int                      @default(1)
+  link_path                 String                   @db.VarChar(512)
+  status                    NotificationStatusEnum   @default(ACTIVE)
+  read_at                   DateTime?                @db.Timestamptz
+  resolved_at               DateTime?                @db.Timestamptz
+  retention_until           DateTime                 @db.Timestamptz
+  created_at                DateTime                 @default(now()) @db.Timestamptz
+  updated_at                DateTime                 @updatedAt @db.Timestamptz
+
+  merchant                  Merchant                         @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  recipient                 User                             @relation("NotificationRecipient", fields: [recipient_user_id], references: [id], onDelete: Cascade)
+  deliveries                NotificationChannelDelivery[]
+  digest_contributions      NotificationDigestContribution[]
+
+  @@unique([merchant_id, event_type, group_key, recipient_user_id])
+  @@index([merchant_id, recipient_user_id, status, severity, created_at])
+  @@index([merchant_id, recipient_user_id, read_at])
+  @@index([merchant_id, retention_until])
+  @@map("notifications")
+}
+
+model NotificationChannelDelivery {
+  id                     String                        @id @default(uuid()) @db.Uuid
+  notification_id        String                        @db.Uuid
+  channel                NotificationChannelEnum
+  state                  NotificationDeliveryStateEnum @default(PENDING)
+  attempts               Int                           @default(0)
+  provider_submission_id String?                       @unique @db.VarChar(255)
+  provider_message_id    String?                       @db.VarChar(255)
+  last_error_code        String?                       @db.VarChar(128)
+  sent_at                DateTime?                     @db.Timestamptz
+  correlation_id         String                        @db.VarChar(128)
+  created_at             DateTime                      @default(now()) @db.Timestamptz
+  updated_at             DateTime                      @updatedAt @db.Timestamptz
+
+  notification           Notification                  @relation(fields: [notification_id], references: [id], onDelete: Cascade)
+
+  @@unique([notification_id, channel])
+  @@index([channel, state, created_at])
+  @@map("notification_channel_deliveries")
+}
+
+model NotificationRedeliverIdempotency {
+  id                  String   @id @default(uuid()) @db.Uuid
+  merchant_id         String   @db.Uuid
+  delivery_id         String   @db.Uuid
+  idempotency_key     String   @db.VarChar(128)
+  request_fingerprint String   @db.VarChar(128)
+  response_snapshot   Json     @db.JsonB
+  created_at          DateTime @default(now()) @db.Timestamptz
+
+  @@unique([merchant_id, delivery_id, idempotency_key])
+  @@index([merchant_id, created_at])
+  @@map("notification_redeliver_idempotency")
+}
+
+model NotificationDigestContribution {
+  id               String       @id @default(uuid()) @db.Uuid
+  notification_id  String       @db.Uuid
+  contribution_key String       @db.VarChar(255)
+  created_at       DateTime     @default(now()) @db.Timestamptz
+
+  notification     Notification @relation(fields: [notification_id], references: [id], onDelete: Cascade)
+
+  @@unique([notification_id, contribution_key])
+  @@map("notification_digest_contributions")
 }
 
 // ============================================================================

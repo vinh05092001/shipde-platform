@@ -665,6 +665,20 @@ async function main() {
     // Clean up test record
     await prisma.outboxEvent.delete({ where: { id: outboxRecord.id } });
 
+    // Stop foundation worker before FEAT-COM-09 integration suite so it cannot race-claim test outbox rows
+    if (workerProc) {
+      await stopProcess(workerProc);
+      workerProc = null;
+    }
+
+    // FEAT-COM-09 Slice A: Notification worker DB + BullMQ/Redis integration (isolated test prefix)
+    console.log('Running FEAT-COM-09 notification worker integration suite...');
+    execSync('pnpm --filter @shipde/worker run test:notifications-integration', {
+      cwd: ROOT_DIR,
+      env: childEnv,
+      stdio: 'inherit',
+    });
+
     console.log('====================================================');
     console.log('🎉 All foundation integration tests passed successfully!');
     console.log('====================================================');
