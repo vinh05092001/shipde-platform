@@ -468,6 +468,13 @@ test('FEAT-COM-09 Slice A Worker Integration: D3/D4/D5/D6 processor, email state
           timeout: 120_000,
         }
       );
+      // The helper prints before closing the app: only a clean exit makes the printed result trustworthy.
+      assert.equal(httpLeg.error, undefined, `HTTP leg failed to spawn: ${httpLeg.error?.message}`);
+      assert.equal(
+        httpLeg.status,
+        0,
+        `HTTP leg exited ${httpLeg.status} (signal ${httpLeg.signal}): ${(httpLeg.stderr || '').slice(-400)}`
+      );
       const resultLine = (httpLeg.stdout || '')
         .split(/\r?\n/)
         .find((l) => l.startsWith('RELEASE_E2E_RESULT '));
@@ -509,8 +516,18 @@ test('FEAT-COM-09 Slice A Worker Integration: D3/D4/D5/D6 processor, email state
         'HTTP replay must not commit a second retry outbox row'
       );
       try {
-        const retryDisp = await dispatcher.dispatchPendingNotifications(10);
-        assert.ok(retryDisp.dispatched >= 1);
+        // The HTTP row keeps its persisted DB-default scheduled_at; poll the real dispatcher (bounded)
+        // instead of a single immediate call, so host/DB clock skew cannot make the first pass miss it.
+        const dispatchDeadline = Date.now() + 10000;
+        let retryDispatched = 0;
+        while (retryDispatched < 1 && Date.now() < dispatchDeadline) {
+          retryDispatched += (await dispatcher.dispatchPendingNotifications(10)).dispatched;
+          if (retryDispatched < 1) await new Promise((r) => setTimeout(r, 200));
+        }
+        assert.ok(
+          retryDispatched >= 1,
+          'Real dispatcher must pick up the HTTP-committed retry row'
+        );
         const retryDeadline = Date.now() + 10000;
         let retryDone = await prisma.outboxEvent.findUnique({ where: { id: retryOutboxRow.id } });
         while (retryDone?.status !== OutboxStatusEnum.PUBLISHED && Date.now() < retryDeadline) {

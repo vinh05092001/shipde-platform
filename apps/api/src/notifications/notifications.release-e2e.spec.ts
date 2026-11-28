@@ -36,13 +36,19 @@ async function main(): Promise<void> {
   if (!databaseUrl || !input.deliveryId) {
     throw new Error('[FAIL_CLOSED] DATABASE_URL and RELEASE_E2E_INPUT are required');
   }
+  // The real AppModule connects to Redis (rate limiting): never fall back to a shared dev Redis.
+  const redisHost = (process.env.REDIS_HOST || '').trim();
+  const redisPort = Number(process.env.REDIS_PORT);
+  if (!redisHost || !Number.isInteger(redisPort) || redisPort <= 0) {
+    throw new Error('[FAIL_CLOSED] explicit REDIS_HOST and REDIS_PORT are required');
+  }
   const testConfig: AppConfig = {
     NODE_ENV: 'test',
     PORT: 3095,
     WORKER_HEALTH_PORT: 3094,
     DATABASE_URL: databaseUrl,
-    REDIS_HOST: process.env.REDIS_HOST || 'localhost',
-    REDIS_PORT: Number(process.env.REDIS_PORT || 6379),
+    REDIS_HOST: redisHost,
+    REDIS_PORT: redisPort,
     S3_ENDPOINT: process.env.S3_ENDPOINT || 'http://localhost:9000',
     S3_REGION: 'us-east-1',
     S3_ACCESS_KEY: 'minioadmin',
